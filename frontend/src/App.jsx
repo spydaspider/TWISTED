@@ -1,30 +1,149 @@
-import { useState } from "react";
+
+import { useEffect, useState } from "react";
 import "./App.css";
 
-const choices = [
-  {
-    id: "open",
+const API_URL = "http://localhost:5000/api";
+const STORY_SLUG = "the-message";
+
+const choiceDetails = {
+  open: {
     letter: "A",
-    title: "Open the door",
     description: "Face whoever is waiting outside.",
   },
-  {
-    id: "reply",
+  reply: {
     letter: "B",
-    title: "Reply to the message",
     description: "Ask your future self what happens next.",
   },
-  {
-    id: "keyhole",
+  keyhole: {
     letter: "C",
-    title: "Look through the keyhole",
     description: "Discover who is standing outside.",
   },
-];
+};
+
+function getVoterId() {
+  const storageKey = "twisted-voter-id";
+
+  let voterId = localStorage.getItem(storageKey);
+
+  if (!voterId) {
+    voterId = crypto.randomUUID();
+    localStorage.setItem(storageKey, voterId);
+  }
+
+  return voterId;
+}
 
 export default function App() {
+  const [story, setStory] = useState(null);
   const [selected, setSelected] = useState("");
-  const [submitted, setSubmitted] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [hasVoted, setHasVoted] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  // Load the story and vote totals from the backend.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadStory() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await fetch(`${API_URL}/stories/${STORY_SLUG}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.message || "Could not load the story.");
+        }
+
+        if (!data.story) {
+          throw new Error("The story could not be found.");
+        }
+
+        if (cancelled) return;
+
+        setStory(data.story);
+
+        const alreadyVoted =
+          localStorage.getItem(`twisted-voted-${STORY_SLUG}`) === "true";
+
+        setHasVoted(alreadyVoted);
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err.message ||
+              "Could not connect to TWISTED. Please try again."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadStory();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const totalVotes =
+    story?.choices?.reduce((total, choice) => total + choice.votes, 0) || 0;
+
+  async function handleVote() {
+    if (!selected || submitting || hasVoted || !story) return;
+
+    try {
+      setSubmitting(true);
+      setError("");
+      setNotice("");
+
+      const voterId = getVoterId();
+
+      const response = await fetch(
+        `${API_URL}/stories/${STORY_SLUG}/vote`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            choiceId: selected,
+            voterId,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        if (response.status === 409) {
+          setHasVoted(true);
+          localStorage.setItem(`twisted-voted-${STORY_SLUG}`, "true");
+        }
+
+        throw new Error(data.message || "Your vote could not be recorded.");
+      }
+
+      setStory(data.story);
+      setHasVoted(true);
+
+      localStorage.setItem(`twisted-voted-${STORY_SLUG}`, "true");
+
+      setNotice("Your vote has been recorded. The story is in your hands.");
+    } catch (err) {
+      setError(
+        err.message ||
+          "Something went wrong while submitting your vote."
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <main>
@@ -54,9 +173,8 @@ export default function App() {
           </h1>
 
           <p className="hero-description">
-            Every decision changes what happens next.
-            Vote with everyone else and watch the story
-            take a turn nobody can take back.
+            Every decision changes what happens next. Vote with everyone
+            else and watch the story take a turn nobody can take back.
           </p>
 
           <a className="primary-button" href="#story">
@@ -84,7 +202,7 @@ export default function App() {
 
       <section className="story-section" id="story">
         <div className="eyebrow">CHAPTER 01 — PSYCHOLOGICAL THRILLER</div>
-        <h2>THE MESSAGE</h2>
+        <h2>{story?.title || "THE MESSAGE"}</h2>
 
         <div className="story-layout">
           <article className="story-card">
@@ -104,8 +222,8 @@ export default function App() {
             </div>
 
             <p>
-              Before you can respond, three slow knocks echo
-              through the house.
+              Before you can respond, three slow knocks echo through the
+              house.
             </p>
 
             <h3>
@@ -120,50 +238,117 @@ export default function App() {
             <h3>Choose what happens next.</h3>
 
             <p className="muted">
-              Pick one action. In the live version, the
-              community's winning choice determines the next
-              official episode.
+              Your choice counts toward the community's decision about the
+              next official episode.
             </p>
 
-            <div className="choices">
-              {choices.map((choice) => (
+            {loading && <p className="notice">Loading story and votes...</p>}
+
+            {error && (
+              <p className="notice" role="alert">
+                {error}
+              </p>
+            )}
+
+            {!loading && story && (
+              <>
+                <div className="vote-summary">
+                  <strong>
+                    {totalVotes.toLocaleString()}{" "}
+                    {totalVotes === 1 ? "vote" : "votes"}
+                  </strong>
+                  <span className="muted"> recorded so far</span>
+                </div>
+
+                <div className="choices">
+                  {story.choices.map((choice) => {
+                    const details = choiceDetails[choice.id] || {
+                      letter: "?",
+                      description: "",
+                    };
+
+                    const percentage =
+                      totalVotes > 0
+                        ? Math.round((choice.votes / totalVotes) * 100)
+                        : 0;
+
+                    return (
+                      <button
+                        type="button"
+                        key={choice.id}
+                        className={`choice ${
+                          selected === choice.id ? "selected" : ""
+                        }`}
+                        onClick={() => {
+                          if (hasVoted || submitting) return;
+
+                          setSelected(choice.id);
+                          setNotice("");
+                          setError("");
+                        }}
+                        disabled={hasVoted || submitting}
+                        aria-pressed={selected === choice.id}
+                      >
+                        <span className="choice-letter">
+                          {details.letter}
+                        </span>
+
+                        <span className="choice-copy">
+                          <strong>{choice.title}</strong>
+                          <small>{details.description}</small>
+
+                          <small>
+                            {choice.votes.toLocaleString()}{" "}
+                            {choice.votes === 1 ? "vote" : "votes"} ·{" "}
+                            {percentage}%
+                          </small>
+
+                          <span
+                            className="vote-bar"
+                            aria-label={`${percentage}% of votes`}
+                          >
+                            <span
+                              className="vote-bar-fill"
+                              style={{ width: `${percentage}%` }}
+                            />
+                          </span>
+                        </span>
+
+                        <span>↗</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {!hasVoted ? (
+                  <button
+                    type="button"
+                    className="primary-button vote-button"
+                    disabled={!selected || submitting || loading}
+                    onClick={handleVote}
+                  >
+                    {submitting ? "Submitting vote..." : "Cast your vote →"}
+                  </button>
+                ) : (
+                  <p className="notice">
+                    You've already voted on this story in this browser.
+                  </p>
+                )}
+
+                {notice && (
+                  <p className="notice" role="status">
+                    {notice}
+                  </p>
+                )}
+
                 <button
                   type="button"
-                  key={choice.id}
-                  className={`choice ${
-                    selected === choice.id ? "selected" : ""
-                  }`}
-                  onClick={() => {
-                    setSelected(choice.id);
-                    setSubmitted(false);
-                  }}
+                  className="refresh-button"
+                  onClick={() => window.location.reload()}
                 >
-                  <span className="choice-letter">{choice.letter}</span>
-
-                  <span className="choice-copy">
-                    <strong>{choice.title}</strong>
-                    <small>{choice.description}</small>
-                  </span>
-
-                  <span>↗</span>
+                  Refresh vote totals ↻
                 </button>
-              ))}
-            </div>
-
-            <button
-              type="button"
-              className="primary-button vote-button"
-              disabled={!selected}
-              onClick={() => setSubmitted(true)}
-            >
-              Cast your vote →
-            </button>
-
-            {submitted && (
-              <p className="notice">
-                Demo only: your choice has been selected, but
-                no vote has been saved to a database yet.
-              </p>
+              </>
             )}
           </aside>
         </div>
