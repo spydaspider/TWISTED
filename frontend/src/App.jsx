@@ -91,6 +91,51 @@ export default function App() {
     };
   }, []);
 
+    // Refresh community vote totals every 5 seconds.
+  useEffect(() => {
+    if (submitting) return;
+
+    let cancelled = false;
+
+    async function refreshVoteTotals() {
+      try {
+        const response = await fetch(
+          `${API_URL}/stories/${STORY_SLUG}`
+        );
+
+        if (!response.ok) return;
+
+        const data = await response.json();
+
+        if (!data.story || cancelled) return;
+
+        // Update the story without changing the user's voting state.
+        setStory((currentStory) => {
+          if (!currentStory) {
+            return data.story;
+          }
+
+          return {
+            ...currentStory,
+            ...data.story,
+          };
+        });
+      } catch {
+        // Keep showing the last known totals if a refresh fails.
+      }
+    }
+
+    const intervalId = window.setInterval(
+      refreshVoteTotals,
+      5000
+    );
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [submitting]);
+
   const totalVotes =
     story?.choices?.reduce((total, choice) => total + choice.votes, 0) || 0;
 

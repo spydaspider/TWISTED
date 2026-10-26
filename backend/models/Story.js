@@ -70,6 +70,18 @@ const storySchema = new mongoose.Schema(
       type: [voterSchema],
       default: [],
     },
+
+    // The winning choice ID after voting is closed.
+    winningChoiceId: {
+      type: String,
+      default: null,
+    },
+
+    // Contains the choice IDs if the highest vote count is tied.
+    tiedChoiceIds: {
+      type: [String],
+      default: [],
+    },
   },
   { timestamps: true }
 );

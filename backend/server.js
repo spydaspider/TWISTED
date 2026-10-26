@@ -34,7 +34,7 @@ const initialStory = {
   ],
 };
 
-// Seed the first story without resetting existing data
+// Seed the first story without resetting existing data.
 async function seedInitialStory() {
   await Story.updateOne(
     { slug: initialStory.slug },
@@ -45,7 +45,7 @@ async function seedInitialStory() {
   console.log("Initial story is ready");
 }
 
-// Welcome route
+// Welcome route.
 app.get("/", (req, res) => {
   res.json({
     success: true,
@@ -53,7 +53,7 @@ app.get("/", (req, res) => {
   });
 });
 
-// Health check
+// Health check.
 app.get("/api/health", (req, res) => {
   res.json({
     success: true,
@@ -65,7 +65,7 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Get all stories
+// Get all stories.
 app.get("/api/stories", async (req, res) => {
   try {
     const stories = await Story.find()
@@ -90,7 +90,7 @@ app.get("/api/stories", async (req, res) => {
   }
 });
 
-// Get one story and its vote totals
+// Get one story and its vote totals.
 app.get("/api/stories/:slug", async (req, res) => {
   try {
     const story = await Story.findOne({
@@ -123,7 +123,7 @@ app.get("/api/stories/:slug", async (req, res) => {
   }
 });
 
-// Submit a vote
+// Submit a vote.
 app.post("/api/stories/:slug/vote", async (req, res) => {
   try {
     const { choiceId, voterId } = req.body;
@@ -169,10 +169,11 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       });
     }
 
-    // Atomic update: one vote per voter ID per story
+    // Atomic update: one vote per voter ID per story.
     const updatedStory = await Story.findOneAndUpdate(
       {
         _id: story._id,
+        status: "voting",
         "voters.voterId": { $ne: voterId },
       },
       {
@@ -193,7 +194,8 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
     if (!updatedStory) {
       return res.status(409).json({
         success: false,
-        message: "You have already voted on this story",
+        message:
+          "You have already voted, or voting has closed",
       });
     }
 
@@ -215,7 +217,131 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
   }
 });
 
-// Unknown routes
+// Close voting and calculate the winning choice.
+// DEVELOPMENT ADMIN ENDPOINT: protect this with ADMIN_SECRET.
+app.post(
+  "/api/stories/:slug/close-voting",
+  async (req, res) => {
+    try {
+      const adminSecret = process.env.ADMIN_SECRET;
+
+      if (!adminSecret) {
+        return res.status(503).json({
+          success: false,
+          message: "ADMIN_SECRET is not configured",
+        });
+      }
+
+      const providedSecret = req.get("x-admin-secret");
+
+      if (providedSecret !== adminSecret) {
+        return res.status(401).json({
+          success: false,
+          message: "Unauthorized",
+        });
+      }
+
+      const story = await Story.findOne({
+        slug: req.params.slug,
+      });
+
+      if (!story) {
+        return res.status(404).json({
+          success: false,
+          message: "Story not found",
+        });
+      }
+
+      if (story.status === "completed") {
+        return res.status(409).json({
+          success: false,
+          message: "Voting has already been closed",
+          winningChoiceId: story.winningChoiceId,
+          tiedChoiceIds: story.tiedChoiceIds,
+        });
+      }
+
+      if (story.status !== "voting") {
+        return res.status(400).json({
+          success: false,
+          message: "This story is not currently accepting votes",
+        });
+      }
+
+      const totalVotes = story.choices.reduce(
+        (total, choice) => total + choice.votes,
+        0
+      );
+
+      if (totalVotes === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "At least one vote is required before closing",
+        });
+      }
+
+      const highestVoteCount = Math.max(
+        ...story.choices.map((choice) => choice.votes)
+      );
+
+      const topChoices = story.choices.filter(
+        (choice) => choice.votes === highestVoteCount
+      );
+
+      // A single leader becomes the winner.
+      // Multiple leaders are stored as a tie.
+      story.winningChoiceId =
+        topChoices.length === 1 ? topChoices[0].id : null;
+
+      story.tiedChoiceIds =
+        topChoices.length > 1
+          ? topChoices.map((choice) => choice.id)
+          : [];
+
+      story.status = "completed";
+
+      await story.save();
+
+      res.json({
+        success: true,
+        message:
+          topChoices.length === 1
+            ? "Voting closed. The winning choice has been selected."
+            : "Voting closed. The result is a tie.",
+        totalVotes,
+        winningChoice:
+          topChoices.length === 1
+            ? {
+                id: topChoices[0].id,
+                title: topChoices[0].title,
+                votes: topChoices[0].votes,
+              }
+            : null,
+        tiedChoices:
+          topChoices.length > 1
+            ? topChoices.map((choice) => ({
+                id: choice.id,
+                title: choice.title,
+                votes: choice.votes,
+              }))
+            : [],
+        story: {
+          ...story.toObject(),
+          id: story.slug,
+        },
+      });
+    } catch (error) {
+      console.error("Could not close voting:", error.message);
+
+      res.status(500).json({
+        success: false,
+        message: "Could not close voting",
+      });
+    }
+  }
+);
+
+// Unknown routes.
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -223,7 +349,7 @@ app.use((req, res) => {
   });
 });
 
-// Connect to MongoDB and start the API
+// Connect to MongoDB and start the API.
 async function startServer() {
   try {
     if (!process.env.MONGO_URI) {
