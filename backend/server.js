@@ -34,7 +34,32 @@ const initialStory = {
   ],
 };
 
-// Seed the first story without resetting existing data.
+// Remove private voter records from public API responses.
+function publicStory(story) {
+  const result = story.toObject
+    ? story.toObject()
+    : { ...story };
+
+  delete result.voters;
+  delete result.runoffVoters;
+
+  return {
+    ...result,
+    id: result.slug,
+  };
+}
+
+// Check the admin secret for development admin endpoints.
+function isAdmin(req) {
+  const adminSecret = process.env.ADMIN_SECRET;
+
+  return Boolean(
+    adminSecret &&
+    req.get("x-admin-secret") === adminSecret
+  );
+}
+
+// Seed the initial story without resetting existing data.
 async function seedInitialStory() {
   await Story.updateOne(
     { slug: initialStory.slug },
@@ -69,7 +94,7 @@ app.get("/api/health", (req, res) => {
 app.get("/api/stories", async (req, res) => {
   try {
     const stories = await Story.find()
-      .select("-voters")
+      .select("-voters -runoffVoters")
       .sort({ createdAt: -1 })
       .lean();
 
@@ -90,13 +115,13 @@ app.get("/api/stories", async (req, res) => {
   }
 });
 
-// Get one story and its vote totals.
+// Get one story without private voter records.
 app.get("/api/stories/:slug", async (req, res) => {
   try {
     const story = await Story.findOne({
       slug: req.params.slug,
     })
-      .select("-voters")
+      .select("-voters -runoffVoters")
       .lean();
 
     if (!story) {
@@ -123,7 +148,7 @@ app.get("/api/stories/:slug", async (req, res) => {
   }
 });
 
-// Submit a vote.
+// Submit a vote to the original round or active runoff.
 app.post("/api/stories/:slug/vote", async (req, res) => {
   try {
     const { choiceId, voterId } = req.body;
@@ -151,6 +176,57 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       });
     }
 
+    // Runoff voting is separate from the original round.
+    if (story.runoffStatus === "voting") {
+      const selectedChoice = story.runoffChoices.find(
+        (choice) => choice.id === choiceId
+      );
+
+      if (!selectedChoice) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid runoff choice",
+        });
+      }
+
+      const updatedStory = await Story.findOneAndUpdate(
+        {
+          _id: story._id,
+          runoffStatus: "voting",
+          "runoffVoters.voterId": { $ne: voterId },
+        },
+        {
+          $push: {
+            runoffVoters: { voterId, choiceId },
+          },
+          $inc: {
+            "runoffChoices.$[selected].votes": 1,
+          },
+        },
+        {
+          new: true,
+          arrayFilters: [{ "selected.id": choiceId }],
+          runValidators: true,
+        }
+      ).select("-voters -runoffVoters");
+
+      if (!updatedStory) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "You have already voted in this runoff, or runoff voting has closed",
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: "Your runoff vote has been recorded",
+        round: "runoff",
+        story: publicStory(updatedStory),
+      });
+    }
+
+    // Original voting round.
     if (story.status !== "voting") {
       return res.status(400).json({
         success: false,
@@ -169,7 +245,6 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       });
     }
 
-    // Atomic update: one vote per voter ID per story.
     const updatedStory = await Story.findOneAndUpdate(
       {
         _id: story._id,
@@ -189,7 +264,7 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
         arrayFilters: [{ "selected.id": choiceId }],
         runValidators: true,
       }
-    ).select("-voters");
+    ).select("-voters -runoffVoters");
 
     if (!updatedStory) {
       return res.status(409).json({
@@ -199,13 +274,11 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: "Your vote has been recorded",
-      story: {
-        ...updatedStory.toObject(),
-        id: updatedStory.slug,
-      },
+      round: "original",
+      story: publicStory(updatedStory),
     });
   } catch (error) {
     console.error("Could not submit vote:", error.message);
@@ -217,27 +290,19 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
   }
 });
 
-// Close voting and calculate the winning choice.
-// DEVELOPMENT ADMIN ENDPOINT: protect this with ADMIN_SECRET.
+// Close the original voting round.
 app.post(
   "/api/stories/:slug/close-voting",
   async (req, res) => {
     try {
-      const adminSecret = process.env.ADMIN_SECRET;
-
-      if (!adminSecret) {
-        return res.status(503).json({
+      if (!isAdmin(req)) {
+        return res.status(
+          process.env.ADMIN_SECRET ? 401 : 503
+        ).json({
           success: false,
-          message: "ADMIN_SECRET is not configured",
-        });
-      }
-
-      const providedSecret = req.get("x-admin-secret");
-
-      if (providedSecret !== adminSecret) {
-        return res.status(401).json({
-          success: false,
-          message: "Unauthorized",
+          message: process.env.ADMIN_SECRET
+            ? "Unauthorized"
+            : "ADMIN_SECRET is not configured",
         });
       }
 
@@ -252,19 +317,10 @@ app.post(
         });
       }
 
-      if (story.status === "completed") {
+      if (story.status !== "voting") {
         return res.status(409).json({
           success: false,
-          message: "Voting has already been closed",
-          winningChoiceId: story.winningChoiceId,
-          tiedChoiceIds: story.tiedChoiceIds,
-        });
-      }
-
-      if (story.status !== "voting") {
-        return res.status(400).json({
-          success: false,
-          message: "This story is not currently accepting votes",
+          message: "Original voting is already closed",
         });
       }
 
@@ -288,8 +344,6 @@ app.post(
         (choice) => choice.votes === highestVoteCount
       );
 
-      // A single leader becomes the winner.
-      // Multiple leaders are stored as a tie.
       story.winningChoiceId =
         topChoices.length === 1 ? topChoices[0].id : null;
 
@@ -302,7 +356,7 @@ app.post(
 
       await story.save();
 
-      res.json({
+      return res.json({
         success: true,
         message:
           topChoices.length === 1
@@ -325,10 +379,7 @@ app.post(
                 votes: choice.votes,
               }))
             : [],
-        story: {
-          ...story.toObject(),
-          id: story.slug,
-        },
+        story: publicStory(story),
       });
     } catch (error) {
       console.error("Could not close voting:", error.message);
@@ -336,6 +387,190 @@ app.post(
       res.status(500).json({
         success: false,
         message: "Could not close voting",
+      });
+    }
+  }
+);
+
+// Start a runoff using only choices tied for first place.
+app.post(
+  "/api/stories/:slug/runoff/start",
+  async (req, res) => {
+    try {
+      if (!isAdmin(req)) {
+        return res.status(
+          process.env.ADMIN_SECRET ? 401 : 503
+        ).json({
+          success: false,
+          message: process.env.ADMIN_SECRET
+            ? "Unauthorized"
+            : "ADMIN_SECRET is not configured",
+        });
+      }
+
+      const story = await Story.findOne({
+        slug: req.params.slug,
+      });
+
+      if (!story) {
+        return res.status(404).json({
+          success: false,
+          message: "Story not found",
+        });
+      }
+
+      if (story.status !== "completed") {
+        return res.status(400).json({
+          success: false,
+          message: "Close the original voting round first",
+        });
+      }
+
+      if (story.runoffStatus !== "not_started") {
+        return res.status(409).json({
+          success: false,
+          message: "The runoff has already been started or completed",
+        });
+      }
+
+      if (!story.tiedChoiceIds || story.tiedChoiceIds.length < 2) {
+        return res.status(400).json({
+          success: false,
+          message: "There is no tie to resolve",
+        });
+      }
+
+      story.runoffChoices = story.choices
+        .filter((choice) =>
+          story.tiedChoiceIds.includes(choice.id)
+        )
+        .map((choice) => ({
+          id: choice.id,
+          title: choice.title,
+          votes: 0,
+        }));
+
+      story.runoffVoters = [];
+      story.runoffWinningChoiceId = null;
+      story.runoffTiedChoiceIds = [];
+      story.runoffStatus = "voting";
+
+      await story.save();
+
+      return res.json({
+        success: true,
+        message: "Runoff voting has started",
+        runoffChoices: story.runoffChoices,
+        story: publicStory(story),
+      });
+    } catch (error) {
+      console.error("Could not start runoff:", error.message);
+
+      res.status(500).json({
+        success: false,
+        message: "Could not start runoff voting",
+      });
+    }
+  }
+);
+
+// Close the runoff and determine its result.
+app.post(
+  "/api/stories/:slug/runoff/close",
+  async (req, res) => {
+    try {
+      if (!isAdmin(req)) {
+        return res.status(
+          process.env.ADMIN_SECRET ? 401 : 503
+        ).json({
+          success: false,
+          message: process.env.ADMIN_SECRET
+            ? "Unauthorized"
+            : "ADMIN_SECRET is not configured",
+        });
+      }
+
+      const story = await Story.findOne({
+        slug: req.params.slug,
+      });
+
+      if (!story) {
+        return res.status(404).json({
+          success: false,
+          message: "Story not found",
+        });
+      }
+
+      if (story.runoffStatus !== "voting") {
+        return res.status(409).json({
+          success: false,
+          message: "There is no active runoff to close",
+        });
+      }
+
+      const totalVotes = story.runoffChoices.reduce(
+        (total, choice) => total + choice.votes,
+        0
+      );
+
+      if (totalVotes === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "At least one runoff vote is required",
+        });
+      }
+
+      const highestVoteCount = Math.max(
+        ...story.runoffChoices.map((choice) => choice.votes)
+      );
+
+      const topChoices = story.runoffChoices.filter(
+        (choice) => choice.votes === highestVoteCount
+      );
+
+      story.runoffWinningChoiceId =
+        topChoices.length === 1 ? topChoices[0].id : null;
+
+      story.runoffTiedChoiceIds =
+        topChoices.length > 1
+          ? topChoices.map((choice) => choice.id)
+          : [];
+
+      story.runoffStatus = "completed";
+
+      await story.save();
+
+      return res.json({
+        success: true,
+        message:
+          topChoices.length === 1
+            ? "Runoff closed. The official story direction has been selected."
+            : "The runoff also ended in a tie. Another tie-resolution step is needed.",
+        totalVotes,
+        winningChoice:
+          topChoices.length === 1
+            ? {
+                id: topChoices[0].id,
+                title: topChoices[0].title,
+                votes: topChoices[0].votes,
+              }
+            : null,
+        tiedChoices:
+          topChoices.length > 1
+            ? topChoices.map((choice) => ({
+                id: choice.id,
+                title: choice.title,
+                votes: choice.votes,
+              }))
+            : [],
+        story: publicStory(story),
+      });
+    } catch (error) {
+      console.error("Could not close runoff:", error.message);
+
+      res.status(500).json({
+        success: false,
+        message: "Could not close runoff",
       });
     }
   }
