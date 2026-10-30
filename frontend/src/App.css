@@ -1040,7 +1040,35 @@ p.notice[role="status"] {
     padding: 16px;
   }
 }
+.episode-navigation {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 25px 0;
+  max-width: 420px;
+}
 
+.episode-navigation label {
+  font-size: 11px;
+  letter-spacing: 2px;
+  font-weight: 700;
+}
+
+.episode-selector {
+  width: 100%;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  background: #111;
+  color: #fff;
+  font-size: 14px;
+}
+
+.episode-description {
+  opacity: 0.75;
+  line-height: 1.7;
+  margin-bottom: 25px;
+}
 /* =========================
    REDUCED MOTION
 ========================= */

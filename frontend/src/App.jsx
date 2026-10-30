@@ -1,23 +1,9 @@
+
 import { useEffect, useState } from "react";
 import "./App.css";
 
 const API_URL = "http://localhost:5000/api";
-const STORY_SLUG = "the-message";
-
-const choiceDetails = {
-  open: {
-    letter: "A",
-    description: "Face whoever is waiting outside.",
-  },
-  reply: {
-    letter: "B",
-    description: "Ask your future self what happens next.",
-  },
-  keyhole: {
-    letter: "C",
-    description: "Discover who is standing outside.",
-  },
-};
+const SERIES_SLUG = "the-message";
 
 function getVoterId() {
   const storageKey = "twisted-voter-id";
@@ -37,15 +23,12 @@ function getVoterId() {
   return voterId;
 }
 
-function getSavedVote() {
+function getSavedVote(slug) {
   try {
-    const saved = localStorage.getItem(
-      `twisted-voted-${STORY_SLUG}`
-    );
+    const saved = localStorage.getItem(`twisted-voted-${slug}`);
 
     if (!saved) return null;
 
-    // Supports the previous version, which saved "true".
     if (saved === "true") {
       return { round: "original" };
     }
@@ -56,26 +39,50 @@ function getSavedVote() {
   }
 }
 
-function saveVote(round) {
+function saveVote(slug, round) {
   localStorage.setItem(
-    `twisted-voted-${STORY_SLUG}`,
+    `twisted-voted-${slug}`,
     JSON.stringify({ round })
   );
 }
 
+function getChoiceLetter(index) {
+  return String.fromCharCode(65 + index);
+}
+
+function getChoiceDescription(index) {
+  const descriptions = [
+    "This is one possible direction for the story.",
+    "Your decision could change everything.",
+    "The community will decide what happens next.",
+    "Choose the path you want the story to follow.",
+  ];
+
+  return descriptions[index] || descriptions[0];
+}
+
+function sortEpisodes(episodes) {
+  return [...episodes].sort(
+    (a, b) => Number(a.episode || 0) - Number(b.episode || 0)
+  );
+}
+
 export default function App() {
+  const [stories, setStories] = useState([]);
+  const [selectedSlug, setSelectedSlug] = useState("");
   const [story, setStory] = useState(null);
+
   const [selected, setSelected] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [hasVoted, setHasVoted] = useState(false);
   const [votedRound, setVotedRound] = useState(null);
+
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [listError, setListError] = useState("");
 
-  // Determine the voting round currently active on the backend.
   const runoffActive = story?.runoffStatus === "voting";
-
   const activeRound = runoffActive ? "runoff" : "original";
 
   const activeChoices = runoffActive
@@ -102,14 +109,14 @@ export default function App() {
       ? story?.runoffWinningChoiceId
       : story?.winningChoiceId;
 
-  const officialWinner =
-    activeChoices.find((choice) => choice.id === officialWinnerId) ||
-    story?.runoffChoices?.find(
-      (choice) => choice.id === officialWinnerId
-    ) ||
-    story?.choices?.find(
-      (choice) => choice.id === officialWinnerId
-    );
+  const allChoices = [
+    ...(story?.choices || []),
+    ...(story?.runoffChoices || []),
+  ];
+
+  const officialWinner = allChoices.find(
+    (choice) => choice.id === officialWinnerId
+  );
 
   const votingClosed =
     story?.status === "completed" && !runoffActive;
@@ -124,47 +131,162 @@ export default function App() {
     !alreadyVotedThisRound &&
     activeChoices.length > 0;
 
-  // Load the story when the page opens.
+  // Load all published episodes, including the original Episode 1.
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadEpisodes() {
+      try {
+        const response = await fetch(`${API_URL}/stories`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.message || "Could not load published episodes."
+          );
+        }
+
+        const episodeList = Array.isArray(data.stories)
+          ? data.stories
+          : Array.isArray(data)
+            ? data
+            : [];
+
+        // Episode 1 may not have seriesSlug because it was
+        // created before the episode-series system existed.
+        let publishedEpisodes = episodeList.filter(
+          (episode) =>
+            episode.status !== "draft" &&
+            (
+              episode.seriesSlug === SERIES_SLUG ||
+              episode.slug === SERIES_SLUG ||
+              episode.previousEpisodeSlug === SERIES_SLUG
+            )
+        );
+
+        // If Episode 1 is missing from the list, fetch it directly.
+        const episodeOneExists = publishedEpisodes.some(
+          (episode) => episode.slug === SERIES_SLUG
+        );
+
+        if (!episodeOneExists) {
+          try {
+            const firstEpisodeResponse = await fetch(
+              `${API_URL}/stories/${SERIES_SLUG}`
+            );
+
+            const firstEpisodeData =
+              await firstEpisodeResponse.json();
+
+            if (
+              firstEpisodeResponse.ok &&
+              firstEpisodeData.story &&
+              firstEpisodeData.story.status !== "draft"
+            ) {
+              publishedEpisodes.push(firstEpisodeData.story);
+            }
+          } catch {
+            // Continue with episodes already retrieved.
+          }
+        }
+
+        if (cancelled) return;
+
+        // Remove duplicates and sort episodes in order.
+        const uniqueEpisodes = Array.from(
+          new Map(
+            publishedEpisodes.map((episode) => [
+              episode.slug,
+              episode,
+            ])
+          ).values()
+        );
+
+        const sortedEpisodes = sortEpisodes(uniqueEpisodes);
+
+        setStories(sortedEpisodes);
+        setListError("");
+
+        if (sortedEpisodes.length === 0) {
+          setListError("No published episodes are available yet.");
+          return;
+        }
+
+        setSelectedSlug((currentSlug) => {
+          if (
+            currentSlug &&
+            sortedEpisodes.some(
+              (episode) => episode.slug === currentSlug
+            )
+          ) {
+            return currentSlug;
+          }
+
+          // Initially select the latest published episode.
+          return sortedEpisodes[sortedEpisodes.length - 1].slug;
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setListError(
+            err.message || "Could not load the episode list."
+          );
+        }
+      }
+    }
+
+    loadEpisodes();
+
+    const intervalId = window.setInterval(loadEpisodes, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  // Load the selected episode.
+  useEffect(() => {
+    if (!selectedSlug) return;
+
     let cancelled = false;
 
     async function loadStory() {
       try {
         setLoading(true);
         setError("");
+        setNotice("");
+        setSelected("");
 
         const response = await fetch(
-          `${API_URL}/stories/${STORY_SLUG}`
+          `${API_URL}/stories/${selectedSlug}`
         );
 
         const data = await response.json();
 
         if (!response.ok) {
           throw new Error(
-            data.message || "Could not load the story."
+            data.message || "Could not load this episode."
           );
         }
 
         if (!data.story) {
-          throw new Error("The story could not be found.");
+          throw new Error("This episode could not be found.");
         }
 
         if (cancelled) return;
 
         setStory(data.story);
 
-        const savedVote = getSavedVote();
+        const savedVote = getSavedVote(selectedSlug);
 
-        if (savedVote) {
-          setHasVoted(true);
-          setVotedRound(savedVote.round || "original");
-        }
+        setHasVoted(Boolean(savedVote));
+        setVotedRound(savedVote?.round || null);
       } catch (err) {
         if (!cancelled) {
           setError(
-            err.message ||
-              "Could not connect to TWISTED. Please try again."
+            err.message || "Could not connect to TWISTED."
           );
+          setStory(null);
         }
       } finally {
         if (!cancelled) {
@@ -178,17 +300,18 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [selectedSlug]);
 
-  // Refresh the story and vote totals every five seconds.
-  // This does not reset the user's selected choice or voting state.
+  // Refresh vote totals every five seconds.
   useEffect(() => {
+    if (!selectedSlug) return;
+
     let cancelled = false;
 
     async function refreshVoteTotals() {
       try {
         const response = await fetch(
-          `${API_URL}/stories/${STORY_SLUG}`
+          `${API_URL}/stories/${selectedSlug}`
         );
 
         if (!response.ok) return;
@@ -199,21 +322,20 @@ export default function App() {
 
         setStory(data.story);
 
-        // If the voting round has changed, clear an obsolete selection.
         setSelected((currentSelected) => {
           const choices =
             data.story.runoffStatus === "voting"
               ? data.story.runoffChoices || []
               : data.story.choices || [];
 
-          const stillExists = choices.some(
+          return choices.some(
             (choice) => choice.id === currentSelected
-          );
-
-          return stillExists ? currentSelected : "";
+          )
+            ? currentSelected
+            : "";
         });
       } catch {
-        // Keep the last successfully loaded story if refresh fails.
+        // Keep the last successfully loaded episode.
       }
     }
 
@@ -226,13 +348,12 @@ export default function App() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, []);
+  }, [selectedSlug]);
 
-  // Clear the previous selection when the voting round changes.
+  // Clear selection when the voting round changes.
   useEffect(() => {
     setSelected("");
     setNotice("");
-    setError("");
   }, [activeRound]);
 
   async function handleVote() {
@@ -246,7 +367,7 @@ export default function App() {
       const voterId = getVoterId();
 
       const response = await fetch(
-        `${API_URL}/stories/${STORY_SLUG}/vote`,
+        `${API_URL}/stories/${selectedSlug}/vote`,
         {
           method: "POST",
           headers: {
@@ -265,7 +386,7 @@ export default function App() {
         if (response.status === 409) {
           setHasVoted(true);
           setVotedRound(activeRound);
-          saveVote(activeRound);
+          saveVote(selectedSlug, activeRound);
         }
 
         throw new Error(
@@ -278,11 +399,14 @@ export default function App() {
       }
 
       setHasVoted(true);
-      setVotedRound(data.round || activeRound);
-      saveVote(data.round || activeRound);
+
+      const recordedRound = data.round || activeRound;
+
+      setVotedRound(recordedRound);
+      saveVote(selectedSlug, recordedRound);
 
       setNotice(
-        data.round === "runoff"
+        recordedRound === "runoff"
           ? "Your runoff vote has been recorded. The community is choosing the final direction."
           : "Your vote has been recorded. The story is in your hands."
       );
@@ -298,9 +422,13 @@ export default function App() {
     }
   }
 
-  function handleManualRefresh() {
-    window.location.reload();
+  function handleEpisodeChange(event) {
+    setSelectedSlug(event.target.value);
   }
+
+  const storyParagraphs = story?.content
+    ? story.content.split(/\n\s*\n/)
+    : [];
 
   return (
     <main>
@@ -362,44 +490,90 @@ export default function App() {
 
       <section className="story-section" id="story">
         <div className="eyebrow">
-          CHAPTER 01 — PSYCHOLOGICAL THRILLER
+          THE MESSAGE — PSYCHOLOGICAL THRILLER
         </div>
 
         <h2>{story?.title || "THE MESSAGE"}</h2>
 
+        <div className="episode-navigation">
+          <label htmlFor="episode-select">
+            SELECT AN EPISODE
+          </label>
+
+          <select
+            id="episode-select"
+            className="episode-selector"
+            value={selectedSlug}
+            onChange={handleEpisodeChange}
+            disabled={stories.length === 0}
+          >
+            {stories.map((episode) => (
+              <option key={episode.slug} value={episode.slug}>
+                Episode {episode.episode}: {episode.title}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {listError && (
+          <p className="notice" role="alert">
+            {listError}
+          </p>
+        )}
+
         <div className="story-layout">
           <article className="story-card">
-            <p className="story-time">11:47 PM</p>
+            {loading ? (
+              <p>Loading episode...</p>
+            ) : story ? (
+              <>
+                <p className="story-time">
+                  EPISODE {story.episode}
+                </p>
 
-            <p>
-              You are home alone when your phone lights up.
-            </p>
+                {story.description && (
+                  <p className="episode-description">
+                    {story.description}
+                  </p>
+                )}
 
-            <div className="message-box">
-              <small>UNKNOWN NUMBER</small>
-              <p>I'm you. Three days from now.</p>
-            </div>
+                {storyParagraphs.length > 0 ? (
+                  storyParagraphs.map((paragraph, index) => (
+                    <p key={index}>{paragraph}</p>
+                  ))
+                ) : (
+                  <>
+                    <p>
+                      You are home alone when your phone lights up.
+                    </p>
 
-            <p>
-              You stare at the screen. Another message arrives.
-            </p>
+                    <div className="message-box">
+                      <small>UNKNOWN NUMBER</small>
+                      <p>I'm you. Three days from now.</p>
+                    </div>
 
-            <div className="message-box warning">
-              <p>
-                Whatever you do, don't open your bedroom door.
-              </p>
-            </div>
+                    <p>
+                      You stare at the screen. Another message arrives.
+                    </p>
 
-            <p>
-              Before you can respond, three slow knocks echo
-              through the house.
-            </p>
+                    <div className="message-box warning">
+                      <p>
+                        Whatever you do, don't open your bedroom door.
+                      </p>
+                    </div>
 
-            <h3>
-              Someone is outside your bedroom.
-              <br />
-              What do you do?
-            </h3>
+                    <p>
+                      Before you can respond, three slow knocks echo
+                      through the house.
+                    </p>
+                  </>
+                )}
+
+                <h3>What happens next?</h3>
+              </>
+            ) : (
+              <p>This episode could not be loaded.</p>
+            )}
           </article>
 
           <aside className="vote-panel">
@@ -435,11 +609,9 @@ export default function App() {
                   <div className="runoff-results">
                     <strong>RUNOFF VOTING</strong>
                     <p>
-                      The original vote ended in a tie. The
-                      community is choosing between the tied
-                      directions.
+                      The original vote ended in a tie. The community
+                      is choosing between the tied directions.
                     </p>
-
                     <p>
                       Original round:{" "}
                       {originalTotalVotes.toLocaleString()} votes
@@ -454,20 +626,20 @@ export default function App() {
                   </strong>
 
                   <span className="muted">
-                    {" "}
                     {runoffActive
-                      ? "in the runoff"
-                      : "in the original round"}
+                      ? " in the runoff"
+                      : " in the original round"}
                   </span>
                 </div>
 
                 {officialWinner && (
                   <div className="official-result">
-                    <p className="eyebrow">OFFICIAL STORY DIRECTION</p>
+                    <p className="eyebrow">
+                      OFFICIAL STORY DIRECTION
+                    </p>
                     <h3>{officialWinner.title}</h3>
                     <p>
-                      The community's winning choice has been
-                      confirmed.
+                      The community's winning choice has been confirmed.
                     </p>
                   </div>
                 )}
@@ -482,26 +654,13 @@ export default function App() {
                         : "The vote has ended in a tie."}
                     </h3>
                     <p>
-                      The official story direction has not been
-                      selected yet.
+                      The official story direction has not been selected yet.
                     </p>
                   </div>
                 )}
 
-                {!votingClosed && !runoffActive &&
-                  story.status === "completed" && (
-                    <p className="notice">
-                      The original round is complete.
-                    </p>
-                  )}
-
                 <div className="choices">
-                  {activeChoices.map((choice) => {
-                    const details = choiceDetails[choice.id] || {
-                      letter: "?",
-                      description: "",
-                    };
-
+                  {activeChoices.map((choice, index) => {
                     const percentage =
                       totalVotes > 0
                         ? Math.round(
@@ -532,7 +691,7 @@ export default function App() {
                         aria-pressed={selected === choice.id}
                       >
                         <span className="choice-letter">
-                          {details.letter}
+                          {getChoiceLetter(index)}
                         </span>
 
                         <span className="choice-copy">
@@ -541,7 +700,9 @@ export default function App() {
                             {isWinner ? " — WINNER" : ""}
                           </strong>
 
-                          <small>{details.description}</small>
+                          <small>
+                            {getChoiceDescription(index)}
+                          </small>
 
                           <small>
                             {(Number(choice.votes) || 0).toLocaleString()}{" "}
@@ -557,9 +718,7 @@ export default function App() {
                           >
                             <span
                               className="vote-bar-fill"
-                              style={{
-                                width: `${percentage}%`,
-                              }}
+                              style={{ width: `${percentage}%` }}
                             />
                           </span>
                         </span>
@@ -585,8 +744,7 @@ export default function App() {
                   </button>
                 ) : alreadyVotedThisRound ? (
                   <p className="notice">
-                    You've already voted in this round in this
-                    browser.
+                    You've already voted in this round in this browser.
                   </p>
                 ) : votingClosed ? (
                   <p className="notice">
@@ -594,8 +752,7 @@ export default function App() {
                   </p>
                 ) : (
                   <p className="notice">
-                    There are currently no choices available for
-                    this voting round.
+                    There are currently no choices available for this voting round.
                   </p>
                 )}
 
@@ -623,7 +780,7 @@ export default function App() {
                 <button
                   type="button"
                   className="refresh-button"
-                  onClick={handleManualRefresh}
+                  onClick={() => window.location.reload()}
                 >
                   Refresh page ↻
                 </button>
