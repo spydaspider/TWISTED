@@ -1,12 +1,19 @@
+
 require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
+
 const Story = require("./models/Story");
+const episodeRoutes = require("./routes/episodeRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// =====================================
+// MIDDLEWARE
+// =====================================
 
 app.use(
   cors({
@@ -19,14 +26,23 @@ app.use(
 
 app.use(express.json({ limit: "10kb" }));
 
+// AI episode generation, editing and publishing routes.
+app.use("/api/admin", episodeRoutes);
+
+// =====================================
+// INITIAL STORY
+// =====================================
+
 const initialStory = {
   slug: "the-message",
   title: "THE MESSAGE",
   genre: "Psychological Thriller",
   episode: 1,
   status: "voting",
+
   description:
     "At 11:47 PM, a message arrives from an unknown number: I'm you. Three days from now.",
+
   choices: [
     { id: "open", title: "Open the door", votes: 0 },
     { id: "reply", title: "Reply to the message", votes: 0 },
@@ -34,7 +50,10 @@ const initialStory = {
   ],
 };
 
-// Remove private voter records from public API responses.
+// =====================================
+// PUBLIC STORY FORMAT
+// =====================================
+
 function publicStory(story) {
   const result = story.toObject
     ? story.toObject()
@@ -49,7 +68,10 @@ function publicStory(story) {
   };
 }
 
-// Check the admin secret for development admin endpoints.
+// =====================================
+// ADMIN AUTHENTICATION
+// =====================================
+
 function isAdmin(req) {
   const adminSecret = process.env.ADMIN_SECRET;
 
@@ -59,7 +81,10 @@ function isAdmin(req) {
   );
 }
 
-// Seed the initial story without resetting existing data.
+// =====================================
+// INITIAL STORY SEEDING
+// =====================================
+
 async function seedInitialStory() {
   await Story.updateOne(
     { slug: initialStory.slug },
@@ -70,7 +95,10 @@ async function seedInitialStory() {
   console.log("Initial story is ready");
 }
 
-// Welcome route.
+// =====================================
+// WELCOME ROUTE
+// =====================================
+
 app.get("/", (req, res) => {
   res.json({
     success: true,
@@ -78,11 +106,15 @@ app.get("/", (req, res) => {
   });
 });
 
-// Health check.
+// =====================================
+// HEALTH CHECK
+// =====================================
+
 app.get("/api/health", (req, res) => {
   res.json({
     success: true,
     message: "TWISTED backend is running",
+
     database:
       mongoose.connection.readyState === 1
         ? "connected"
@@ -90,16 +122,23 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Get all stories.
+// =====================================
+// GET ALL PUBLIC STORIES
+// Drafts are hidden.
+// =====================================
+
 app.get("/api/stories", async (req, res) => {
   try {
-    const stories = await Story.find()
+    const stories = await Story.find({
+      status: { $ne: "draft" },
+    })
       .select("-voters -runoffVoters")
       .sort({ createdAt: -1 })
       .lean();
 
     res.json({
       success: true,
+
       stories: stories.map((story) => ({
         ...story,
         id: story.slug,
@@ -115,11 +154,16 @@ app.get("/api/stories", async (req, res) => {
   }
 });
 
-// Get one story without private voter records.
+// =====================================
+// GET ONE PUBLIC STORY
+// Drafts are hidden.
+// =====================================
+
 app.get("/api/stories/:slug", async (req, res) => {
   try {
     const story = await Story.findOne({
       slug: req.params.slug,
+      status: { $ne: "draft" },
     })
       .select("-voters -runoffVoters")
       .lean();
@@ -133,6 +177,7 @@ app.get("/api/stories/:slug", async (req, res) => {
 
     res.json({
       success: true,
+
       story: {
         ...story,
         id: story.slug,
@@ -148,7 +193,11 @@ app.get("/api/stories/:slug", async (req, res) => {
   }
 });
 
-// Submit a vote to the original round or active runoff.
+// =====================================
+// SUBMIT VOTE
+// ORIGINAL ROUND OR ACTIVE RUNOFF
+// =====================================
+
 app.post("/api/stories/:slug/vote", async (req, res) => {
   try {
     const { choiceId, voterId } = req.body;
@@ -176,7 +225,8 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       });
     }
 
-    // Runoff voting is separate from the original round.
+    // RUNOFF VOTING
+
     if (story.runoffStatus === "voting") {
       const selectedChoice = story.runoffChoices.find(
         (choice) => choice.id === choiceId
@@ -199,13 +249,16 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
           $push: {
             runoffVoters: { voterId, choiceId },
           },
+
           $inc: {
             "runoffChoices.$[selected].votes": 1,
           },
         },
         {
           new: true,
-          arrayFilters: [{ "selected.id": choiceId }],
+          arrayFilters: [
+            { "selected.id": choiceId },
+          ],
           runValidators: true,
         }
       ).select("-voters -runoffVoters");
@@ -226,7 +279,8 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       });
     }
 
-    // Original voting round.
+    // ORIGINAL VOTING ROUND
+
     if (story.status !== "voting") {
       return res.status(400).json({
         success: false,
@@ -255,13 +309,16 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
         $push: {
           voters: { voterId, choiceId },
         },
+
         $inc: {
           "choices.$[selected].votes": 1,
         },
       },
       {
         new: true,
-        arrayFilters: [{ "selected.id": choiceId }],
+        arrayFilters: [
+          { "selected.id": choiceId },
+        ],
         runValidators: true,
       }
     ).select("-voters -runoffVoters");
@@ -290,7 +347,10 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
   }
 });
 
-// Close the original voting round.
+// =====================================
+// CLOSE ORIGINAL VOTING
+// =====================================
+
 app.post(
   "/api/stories/:slug/close-voting",
   async (req, res) => {
@@ -345,7 +405,9 @@ app.post(
       );
 
       story.winningChoiceId =
-        topChoices.length === 1 ? topChoices[0].id : null;
+        topChoices.length === 1
+          ? topChoices[0].id
+          : null;
 
       story.tiedChoiceIds =
         topChoices.length > 1
@@ -358,11 +420,14 @@ app.post(
 
       return res.json({
         success: true,
+
         message:
           topChoices.length === 1
             ? "Voting closed. The winning choice has been selected."
             : "Voting closed. The result is a tie.",
+
         totalVotes,
+
         winningChoice:
           topChoices.length === 1
             ? {
@@ -371,6 +436,7 @@ app.post(
                 votes: topChoices[0].votes,
               }
             : null,
+
         tiedChoices:
           topChoices.length > 1
             ? topChoices.map((choice) => ({
@@ -379,6 +445,7 @@ app.post(
                 votes: choice.votes,
               }))
             : [],
+
         story: publicStory(story),
       });
     } catch (error) {
@@ -392,7 +459,10 @@ app.post(
   }
 );
 
-// Start a runoff using only choices tied for first place.
+// =====================================
+// START RUNOFF
+// =====================================
+
 app.post(
   "/api/stories/:slug/runoff/start",
   async (req, res) => {
@@ -433,7 +503,10 @@ app.post(
         });
       }
 
-      if (!story.tiedChoiceIds || story.tiedChoiceIds.length < 2) {
+      if (
+        !story.tiedChoiceIds ||
+        story.tiedChoiceIds.length < 2
+      ) {
         return res.status(400).json({
           success: false,
           message: "There is no tie to resolve",
@@ -474,7 +547,10 @@ app.post(
   }
 );
 
-// Close the runoff and determine its result.
+// =====================================
+// CLOSE RUNOFF
+// =====================================
+
 app.post(
   "/api/stories/:slug/runoff/close",
   async (req, res) => {
@@ -529,7 +605,9 @@ app.post(
       );
 
       story.runoffWinningChoiceId =
-        topChoices.length === 1 ? topChoices[0].id : null;
+        topChoices.length === 1
+          ? topChoices[0].id
+          : null;
 
       story.runoffTiedChoiceIds =
         topChoices.length > 1
@@ -542,11 +620,14 @@ app.post(
 
       return res.json({
         success: true,
+
         message:
           topChoices.length === 1
             ? "Runoff closed. The official story direction has been selected."
             : "The runoff also ended in a tie. Another tie-resolution step is needed.",
+
         totalVotes,
+
         winningChoice:
           topChoices.length === 1
             ? {
@@ -555,6 +636,7 @@ app.post(
                 votes: topChoices[0].votes,
               }
             : null,
+
         tiedChoices:
           topChoices.length > 1
             ? topChoices.map((choice) => ({
@@ -563,6 +645,7 @@ app.post(
                 votes: choice.votes,
               }))
             : [],
+
         story: publicStory(story),
       });
     } catch (error) {
@@ -576,7 +659,10 @@ app.post(
   }
 );
 
-// Unknown routes.
+// =====================================
+// UNKNOWN ROUTES
+// =====================================
+
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -584,23 +670,35 @@ app.use((req, res) => {
   });
 });
 
-// Connect to MongoDB and start the API.
+// =====================================
+// CONNECT TO MONGODB AND START API
+// =====================================
+
 async function startServer() {
   try {
     if (!process.env.MONGO_URI) {
-      throw new Error("MONGO_URI is missing from backend/.env");
+      throw new Error(
+        "MONGO_URI is missing from backend/.env"
+      );
     }
 
     await mongoose.connect(process.env.MONGO_URI);
+
     console.log("MongoDB connected successfully");
 
     await seedInitialStory();
 
     app.listen(PORT, () => {
-      console.log(`TWISTED API running at http://localhost:${PORT}`);
+      console.log(
+        `TWISTED API running at http://localhost:${PORT}`
+      );
     });
   } catch (error) {
-    console.error("Failed to start TWISTED:", error.message);
+    console.error(
+      "Failed to start TWISTED:",
+      error.message
+    );
+
     process.exit(1);
   }
 }
