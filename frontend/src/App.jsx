@@ -1,6 +1,7 @@
 
 import { useEffect, useState } from "react";
 import "./App.css";
+import Admin from "./Admin";
 
 const API_URL = "http://localhost:5000/api";
 const SERIES_SLUG = "the-message";
@@ -67,7 +68,7 @@ function sortEpisodes(episodes) {
   );
 }
 
-export default function App() {
+function PublicApp() {
   const [stories, setStories] = useState([]);
   const [selectedSlug, setSelectedSlug] = useState("");
   const [story, setStory] = useState(null);
@@ -152,8 +153,6 @@ export default function App() {
             ? data
             : [];
 
-        // Episode 1 may not have seriesSlug because it was
-        // created before the episode-series system existed.
         let publishedEpisodes = episodeList.filter(
           (episode) =>
             episode.status !== "draft" &&
@@ -164,7 +163,6 @@ export default function App() {
             )
         );
 
-        // If Episode 1 is missing from the list, fetch it directly.
         const episodeOneExists = publishedEpisodes.some(
           (episode) => episode.slug === SERIES_SLUG
         );
@@ -192,7 +190,6 @@ export default function App() {
 
         if (cancelled) return;
 
-        // Remove duplicates and sort episodes in order.
         const uniqueEpisodes = Array.from(
           new Map(
             publishedEpisodes.map((episode) => [
@@ -222,7 +219,6 @@ export default function App() {
             return currentSlug;
           }
 
-          // Initially select the latest published episode.
           return sortedEpisodes[sortedEpisodes.length - 1].slug;
         });
       } catch (err) {
@@ -831,4 +827,14 @@ export default function App() {
       </footer>
     </main>
   );
+}
+
+export default function App() {
+  const currentPath = window.location.pathname.replace(/\/+$/, "") || "/";
+
+  if (currentPath === "/admin") {
+    return <Admin />;
+  }
+
+  return <PublicApp />;
 }

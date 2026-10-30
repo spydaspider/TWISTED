@@ -8,6 +8,13 @@ const mongoose = require("mongoose");
 const Story = require("./models/Story");
 const episodeRoutes = require("./routes/episodeRoutes");
 
+const {
+  isAdmin,
+  setAdminCookie,
+  clearAdminCookie,
+  verifyAdminSecret,
+} = require("./middleware/adminAuth");
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -21,12 +28,103 @@ app.use(
       "http://localhost:5173",
       "http://localhost:5174",
     ],
+    credentials: true,
   })
 );
 
-app.use(express.json({ limit: "10kb" }));
+app.use(express.json({ limit: "50kb" }));
 
-// AI episode generation, editing and publishing routes.
+// =====================================
+// ADMIN REQUEST AUTHENTICATION
+// Used by the existing voting-management
+// routes. Supports both browser cookies
+// and the Postman admin-secret header.
+// =====================================
+
+function requireAdminRequest(req, res) {
+  if (isAdmin(req)) {
+    return true;
+  }
+
+  res.status(
+    process.env.ADMIN_SECRET ? 401 : 503
+  ).json({
+    success: false,
+    message: process.env.ADMIN_SECRET
+      ? "Unauthorized"
+      : "ADMIN_SECRET is not configured",
+  });
+
+  return false;
+}
+
+// =====================================
+// ADMIN LOGIN
+// POST /api/admin/login
+// =====================================
+
+app.post("/api/admin/login", (req, res) => {
+  const { secret } = req.body || {};
+
+  if (!process.env.ADMIN_SECRET) {
+    return res.status(503).json({
+      success: false,
+      message: "ADMIN_SECRET is not configured",
+    });
+  }
+
+  if (!verifyAdminSecret(secret)) {
+    return res.status(401).json({
+      success: false,
+      message: "Incorrect admin password.",
+    });
+  }
+
+  setAdminCookie(res, process.env.ADMIN_SECRET);
+
+  return res.json({
+    success: true,
+    message: "Admin login successful.",
+  });
+});
+
+// =====================================
+// CHECK ADMIN SESSION
+// GET /api/admin/session
+// =====================================
+
+app.get("/api/admin/session", (req, res) => {
+  if (!isAdmin(req)) {
+    return res.status(401).json({
+      success: false,
+      message: "Admin session expired.",
+    });
+  }
+
+  return res.json({
+    success: true,
+    authenticated: true,
+  });
+});
+
+// =====================================
+// ADMIN LOGOUT
+// POST /api/admin/logout
+// =====================================
+
+app.post("/api/admin/logout", (req, res) => {
+  clearAdminCookie(res);
+
+  return res.json({
+    success: true,
+    message: "Logged out successfully.",
+  });
+});
+
+// =====================================
+// ADMIN EPISODE ROUTES
+// =====================================
+
 app.use("/api/admin", episodeRoutes);
 
 // =====================================
@@ -44,9 +142,21 @@ const initialStory = {
     "At 11:47 PM, a message arrives from an unknown number: I'm you. Three days from now.",
 
   choices: [
-    { id: "open", title: "Open the door", votes: 0 },
-    { id: "reply", title: "Reply to the message", votes: 0 },
-    { id: "keyhole", title: "Look through the keyhole", votes: 0 },
+    {
+      id: "open",
+      title: "Open the door",
+      votes: 0,
+    },
+    {
+      id: "reply",
+      title: "Reply to the message",
+      votes: 0,
+    },
+    {
+      id: "keyhole",
+      title: "Look through the keyhole",
+      votes: 0,
+    },
   ],
 };
 
@@ -69,27 +179,19 @@ function publicStory(story) {
 }
 
 // =====================================
-// ADMIN AUTHENTICATION
-// =====================================
-
-function isAdmin(req) {
-  const adminSecret = process.env.ADMIN_SECRET;
-
-  return Boolean(
-    adminSecret &&
-    req.get("x-admin-secret") === adminSecret
-  );
-}
-
-// =====================================
-// INITIAL STORY SEEDING
+// DATABASE SEEDING
+// Does not overwrite existing stories.
 // =====================================
 
 async function seedInitialStory() {
   await Story.updateOne(
     { slug: initialStory.slug },
-    { $setOnInsert: initialStory },
-    { upsert: true }
+    {
+      $setOnInsert: initialStory,
+    },
+    {
+      upsert: true,
+    }
   );
 
   console.log("Initial story is ready");
@@ -114,7 +216,6 @@ app.get("/api/health", (req, res) => {
   res.json({
     success: true,
     message: "TWISTED backend is running",
-
     database:
       mongoose.connection.readyState === 1
         ? "connected"
@@ -124,7 +225,7 @@ app.get("/api/health", (req, res) => {
 
 // =====================================
 // GET ALL PUBLIC STORIES
-// Drafts are hidden.
+// Draft stories are hidden.
 // =====================================
 
 app.get("/api/stories", async (req, res) => {
@@ -133,21 +234,26 @@ app.get("/api/stories", async (req, res) => {
       status: { $ne: "draft" },
     })
       .select("-voters -runoffVoters")
-      .sort({ createdAt: -1 })
+      .sort({
+        createdAt: -1,
+      })
       .lean();
 
-    res.json({
+    return res.json({
       success: true,
-
       stories: stories.map((story) => ({
         ...story,
         id: story.slug,
       })),
     });
-  } catch (error) {
-    console.error("Could not fetch stories:", error.message);
 
-    res.status(500).json({
+  } catch (error) {
+    console.error(
+      "Could not fetch stories:",
+      error
+    );
+
+    return res.status(500).json({
       success: false,
       message: "Could not retrieve stories",
     });
@@ -156,7 +262,7 @@ app.get("/api/stories", async (req, res) => {
 
 // =====================================
 // GET ONE PUBLIC STORY
-// Drafts are hidden.
+// Draft stories are hidden.
 // =====================================
 
 app.get("/api/stories/:slug", async (req, res) => {
@@ -175,18 +281,21 @@ app.get("/api/stories/:slug", async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
-
       story: {
         ...story,
         id: story.slug,
       },
     });
-  } catch (error) {
-    console.error("Could not fetch story:", error.message);
 
-    res.status(500).json({
+  } catch (error) {
+    console.error(
+      "Could not fetch story:",
+      error
+    );
+
+    return res.status(500).json({
       success: false,
       message: "Could not retrieve story",
     });
@@ -200,23 +309,27 @@ app.get("/api/stories/:slug", async (req, res) => {
 
 app.post("/api/stories/:slug/vote", async (req, res) => {
   try {
-    const { choiceId, voterId } = req.body;
+    const { choiceId, voterId } = req.body || {};
 
     if (
       typeof choiceId !== "string" ||
       typeof voterId !== "string" ||
-      voterId.length < 10 ||
+      voterId.trim().length < 10 ||
       voterId.length > 100
     ) {
       return res.status(400).json({
         success: false,
-        message: "A valid choiceId and voterId are required",
+        message:
+          "A valid choiceId and voterId are required",
       });
     }
 
+    const cleanVoterId = voterId.trim();
+
     const story = await Story.findOne({
       slug: req.params.slug,
-    });
+      status: { $ne: "draft" },
+    }).lean();
 
     if (!story) {
       return res.status(404).json({
@@ -225,10 +338,22 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       });
     }
 
+    console.log("\n========== TWISTED VOTE DEBUG ==========");
+    console.log("Story:", story.slug);
+    console.log("Story ID:", story._id);
+    console.log("Original status:", story.status);
+    console.log("Runoff status:", story.runoffStatus);
+    console.log("Choice ID:", choiceId);
+    console.log("========================================\n");
+
+    // =====================================
     // RUNOFF VOTING
+    // =====================================
 
     if (story.runoffStatus === "voting") {
-      const selectedChoice = story.runoffChoices.find(
+      const selectedChoice = (
+        story.runoffChoices || []
+      ).find(
         (choice) => choice.id === choiceId
       );
 
@@ -243,13 +368,22 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
         {
           _id: story._id,
           runoffStatus: "voting",
-          "runoffVoters.voterId": { $ne: voterId },
+          "runoffChoices.id": choiceId,
+          runoffVoters: {
+            $not: {
+              $elemMatch: {
+                voterId: cleanVoterId,
+              },
+            },
+          },
         },
         {
           $push: {
-            runoffVoters: { voterId, choiceId },
+            runoffVoters: {
+              voterId: cleanVoterId,
+              choiceId,
+            },
           },
-
           $inc: {
             "runoffChoices.$[selected].votes": 1,
           },
@@ -257,11 +391,13 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
         {
           new: true,
           arrayFilters: [
-            { "selected.id": choiceId },
+            {
+              "selected.id": choiceId,
+            },
           ],
           runValidators: true,
         }
-      ).select("-voters -runoffVoters");
+      );
 
       if (!updatedStory) {
         return res.status(409).json({
@@ -271,6 +407,12 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
         });
       }
 
+      console.log(
+        "Successful runoff vote:",
+        cleanVoterId,
+        choiceId
+      );
+
       return res.json({
         success: true,
         message: "Your runoff vote has been recorded",
@@ -279,16 +421,20 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       });
     }
 
-    // ORIGINAL VOTING ROUND
+    // =====================================
+    // ORIGINAL VOTING
+    // =====================================
 
     if (story.status !== "voting") {
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
-        message: "Voting is closed for this story",
+        message: "Original voting is closed",
       });
     }
 
-    const selectedChoice = story.choices.find(
+    const selectedChoice = (
+      story.choices || []
+    ).find(
       (choice) => choice.id === choiceId
     );
 
@@ -303,13 +449,22 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       {
         _id: story._id,
         status: "voting",
-        "voters.voterId": { $ne: voterId },
+        "choices.id": choiceId,
+        voters: {
+          $not: {
+            $elemMatch: {
+              voterId: cleanVoterId,
+            },
+          },
+        },
       },
       {
         $push: {
-          voters: { voterId, choiceId },
+          voters: {
+            voterId: cleanVoterId,
+            choiceId,
+          },
         },
-
         $inc: {
           "choices.$[selected].votes": 1,
         },
@@ -317,19 +472,27 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       {
         new: true,
         arrayFilters: [
-          { "selected.id": choiceId },
+          {
+            "selected.id": choiceId,
+          },
         ],
         runValidators: true,
       }
-    ).select("-voters -runoffVoters");
+    );
 
     if (!updatedStory) {
       return res.status(409).json({
         success: false,
         message:
-          "You have already voted, or voting has closed",
+          "You have already voted, or original voting has closed",
       });
     }
+
+    console.log(
+      "Successful original vote:",
+      cleanVoterId,
+      choiceId
+    );
 
     return res.json({
       success: true,
@@ -337,12 +500,17 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       round: "original",
       story: publicStory(updatedStory),
     });
-  } catch (error) {
-    console.error("Could not submit vote:", error.message);
 
-    res.status(500).json({
+  } catch (error) {
+    console.error(
+      "Could not submit vote:",
+      error
+    );
+
+    return res.status(500).json({
       success: false,
       message: "Could not submit your vote",
+      error: error.message,
     });
   }
 });
@@ -355,15 +523,8 @@ app.post(
   "/api/stories/:slug/close-voting",
   async (req, res) => {
     try {
-      if (!isAdmin(req)) {
-        return res.status(
-          process.env.ADMIN_SECRET ? 401 : 503
-        ).json({
-          success: false,
-          message: process.env.ADMIN_SECRET
-            ? "Unauthorized"
-            : "ADMIN_SECRET is not configured",
-        });
+      if (!requireAdminRequest(req, res)) {
+        return;
       }
 
       const story = await Story.findOne({
@@ -392,12 +553,15 @@ app.post(
       if (totalVotes === 0) {
         return res.status(400).json({
           success: false,
-          message: "At least one vote is required before closing",
+          message:
+            "At least one vote is required before closing",
         });
       }
 
       const highestVoteCount = Math.max(
-        ...story.choices.map((choice) => choice.votes)
+        ...story.choices.map(
+          (choice) => choice.votes
+        )
       );
 
       const topChoices = story.choices.filter(
@@ -411,7 +575,9 @@ app.post(
 
       story.tiedChoiceIds =
         topChoices.length > 1
-          ? topChoices.map((choice) => choice.id)
+          ? topChoices.map(
+              (choice) => choice.id
+            )
           : [];
 
       story.status = "completed";
@@ -448,10 +614,14 @@ app.post(
 
         story: publicStory(story),
       });
-    } catch (error) {
-      console.error("Could not close voting:", error.message);
 
-      res.status(500).json({
+    } catch (error) {
+      console.error(
+        "Could not close voting:",
+        error
+      );
+
+      return res.status(500).json({
         success: false,
         message: "Could not close voting",
       });
@@ -467,15 +637,8 @@ app.post(
   "/api/stories/:slug/runoff/start",
   async (req, res) => {
     try {
-      if (!isAdmin(req)) {
-        return res.status(
-          process.env.ADMIN_SECRET ? 401 : 503
-        ).json({
-          success: false,
-          message: process.env.ADMIN_SECRET
-            ? "Unauthorized"
-            : "ADMIN_SECRET is not configured",
-        });
+      if (!requireAdminRequest(req, res)) {
+        return;
       }
 
       const story = await Story.findOne({
@@ -492,14 +655,16 @@ app.post(
       if (story.status !== "completed") {
         return res.status(400).json({
           success: false,
-          message: "Close the original voting round first",
+          message:
+            "Close the original voting round first",
         });
       }
 
       if (story.runoffStatus !== "not_started") {
         return res.status(409).json({
           success: false,
-          message: "The runoff has already been started or completed",
+          message:
+            "The runoff has already been started or completed",
         });
       }
 
@@ -513,15 +678,25 @@ app.post(
         });
       }
 
-      story.runoffChoices = story.choices
-        .filter((choice) =>
+      const tiedChoices = story.choices.filter(
+        (choice) =>
           story.tiedChoiceIds.includes(choice.id)
-        )
-        .map((choice) => ({
+      );
+
+      if (tiedChoices.length < 2) {
+        return res.status(400).json({
+          success: false,
+          message: "Could not find the tied choices",
+        });
+      }
+
+      story.runoffChoices = tiedChoices.map(
+        (choice) => ({
           id: choice.id,
           title: choice.title,
           votes: 0,
-        }));
+        })
+      );
 
       story.runoffVoters = [];
       story.runoffWinningChoiceId = null;
@@ -536,10 +711,14 @@ app.post(
         runoffChoices: story.runoffChoices,
         story: publicStory(story),
       });
-    } catch (error) {
-      console.error("Could not start runoff:", error.message);
 
-      res.status(500).json({
+    } catch (error) {
+      console.error(
+        "Could not start runoff:",
+        error
+      );
+
+      return res.status(500).json({
         success: false,
         message: "Could not start runoff voting",
       });
@@ -555,15 +734,8 @@ app.post(
   "/api/stories/:slug/runoff/close",
   async (req, res) => {
     try {
-      if (!isAdmin(req)) {
-        return res.status(
-          process.env.ADMIN_SECRET ? 401 : 503
-        ).json({
-          success: false,
-          message: process.env.ADMIN_SECRET
-            ? "Unauthorized"
-            : "ADMIN_SECRET is not configured",
-        });
+      if (!requireAdminRequest(req, res)) {
+        return;
       }
 
       const story = await Story.findOne({
@@ -592,12 +764,15 @@ app.post(
       if (totalVotes === 0) {
         return res.status(400).json({
           success: false,
-          message: "At least one runoff vote is required",
+          message:
+            "At least one runoff vote is required",
         });
       }
 
       const highestVoteCount = Math.max(
-        ...story.runoffChoices.map((choice) => choice.votes)
+        ...story.runoffChoices.map(
+          (choice) => choice.votes
+        )
       );
 
       const topChoices = story.runoffChoices.filter(
@@ -611,7 +786,9 @@ app.post(
 
       story.runoffTiedChoiceIds =
         topChoices.length > 1
-          ? topChoices.map((choice) => choice.id)
+          ? topChoices.map(
+              (choice) => choice.id
+            )
           : [];
 
       story.runoffStatus = "completed";
@@ -648,10 +825,14 @@ app.post(
 
         story: publicStory(story),
       });
-    } catch (error) {
-      console.error("Could not close runoff:", error.message);
 
-      res.status(500).json({
+    } catch (error) {
+      console.error(
+        "Could not close runoff:",
+        error
+      );
+
+      return res.status(500).json({
         success: false,
         message: "Could not close runoff",
       });
@@ -693,6 +874,7 @@ async function startServer() {
         `TWISTED API running at http://localhost:${PORT}`
       );
     });
+
   } catch (error) {
     console.error(
       "Failed to start TWISTED:",

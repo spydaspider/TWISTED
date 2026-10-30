@@ -3,31 +3,11 @@ const express = require("express");
 const OpenAI = require("openai");
 const Story = require("../models/Story");
 
+const {
+  requireAdmin,
+} = require("../middleware/adminAuth");
+
 const router = express.Router();
-
-// =====================================
-// ADMIN AUTHENTICATION
-// =====================================
-
-function requireAdmin(req, res, next) {
-  const secret = process.env.ADMIN_SECRET;
-
-  if (!secret) {
-    return res.status(503).json({
-      success: false,
-      message: "ADMIN_SECRET is not configured",
-    });
-  }
-
-  if (req.get("x-admin-secret") !== secret) {
-    return res.status(401).json({
-      success: false,
-      message: "Unauthorized",
-    });
-  }
-
-  next();
-}
 
 // =====================================
 // GET OFFICIAL WINNER
@@ -90,16 +70,63 @@ function publicStory(story) {
 }
 
 // =====================================
+// GET ALL STORIES FOR ADMIN DASHBOARD
+// GET /api/admin/stories
+// Includes drafts and completed episodes.
+// =====================================
+
+router.get(
+  "/stories",
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const stories = await Story.find({})
+        .select("-voters -runoffVoters")
+        .sort({
+          seriesSlug: 1,
+          episode: 1,
+          createdAt: 1,
+        })
+        .lean();
+
+      return res.json({
+        success: true,
+        stories: stories.map((story) => ({
+          ...story,
+          id: story.slug,
+        })),
+      });
+    } catch (error) {
+      console.error(
+        "Admin story retrieval error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message: "Could not retrieve admin stories.",
+      });
+    }
+  }
+);
+
+// =====================================
 // VALIDATE EPISODE INPUT
 // =====================================
 
 function validateEpisodeInput(body) {
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
+  if (
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body)
+  ) {
     return "A valid episode body is required.";
   }
 
   const title =
-    typeof body.title === "string" ? body.title.trim() : "";
+    typeof body.title === "string"
+      ? body.title.trim()
+      : "";
 
   const description =
     typeof body.description === "string"
@@ -182,7 +209,8 @@ router.post(
       if (!process.env.OPENAI_API_KEY) {
         return res.status(503).json({
           success: false,
-          message: "OPENAI_API_KEY is missing from backend/.env",
+          message:
+            "OPENAI_API_KEY is missing from backend/.env",
         });
       }
 
@@ -225,7 +253,8 @@ router.post(
       if (existingDraft) {
         return res.status(409).json({
           success: false,
-          message: "A draft already exists. Retrieve and edit it.",
+          message:
+            "A draft already exists. Retrieve and edit it.",
           draft: publicStory(existingDraft),
         });
       }
@@ -251,7 +280,8 @@ router.post(
         previousStory.content || previousStory.description;
 
       const response = await client.responses.create({
-        model: process.env.OPENAI_MODEL || "gpt-6-luna",
+        model:
+          process.env.OPENAI_MODEL || "gpt-4.1-mini",
 
         instructions: `
 You are the creative writer for TWISTED,
@@ -354,6 +384,7 @@ Return this exact JSON structure:
 
       // Confirm the previous episode's result has not changed
       // while the AI was generating the draft.
+
       const latestPreviousStory = await Story.findOne({
         _id: previousStory._id,
         status: "completed",
@@ -362,7 +393,8 @@ Return this exact JSON structure:
       if (!latestPreviousStory) {
         return res.status(409).json({
           success: false,
-          message: "Previous episode changed during generation.",
+          message:
+            "Previous episode changed during generation.",
         });
       }
 
@@ -375,7 +407,8 @@ Return this exact JSON structure:
       ) {
         return res.status(409).json({
           success: false,
-          message: "The official winner changed. Generate the draft again.",
+          message:
+            "The official winner changed. Generate the draft again.",
         });
       }
 
@@ -411,11 +444,16 @@ Return this exact JSON structure:
 
       return res.status(201).json({
         success: true,
-        message: "AI episode draft generated successfully. It is not published.",
+        message:
+          "AI episode draft generated successfully. It is not published.",
         draft: publicStory(draft),
       });
+
     } catch (error) {
-      console.error("Episode generation error:", error);
+      console.error(
+        "Episode generation error:",
+        error
+      );
 
       if (error.code === 11000) {
         return res.status(409).json({
@@ -427,20 +465,23 @@ Return this exact JSON structure:
       if (error.status === 401) {
         return res.status(502).json({
           success: false,
-          message: "OpenAI authentication failed. Check your API key.",
+          message:
+            "OpenAI authentication failed. Check your API key.",
         });
       }
 
       if (error.status === 429) {
         return res.status(503).json({
           success: false,
-          message: "OpenAI rate limit or usage limit reached.",
+          message:
+            "OpenAI rate limit or usage limit reached.",
         });
       }
 
       return res.status(500).json({
         success: false,
-        message: "Could not generate episode. Check backend logs.",
+        message:
+          "Could not generate episode. Check backend logs.",
       });
     }
   }
@@ -472,8 +513,12 @@ router.get(
         success: true,
         draft: publicStory(draft),
       });
+
     } catch (error) {
-      console.error("Draft retrieval error:", error.message);
+      console.error(
+        "Draft retrieval error:",
+        error.message
+      );
 
       return res.status(500).json({
         success: false,
@@ -527,8 +572,12 @@ router.put(
         message: "Draft updated successfully.",
         draft: publicStory(draft),
       });
+
     } catch (error) {
-      console.error("Draft editing error:", error.message);
+      console.error(
+        "Draft editing error:",
+        error.message
+      );
 
       return res.status(500).json({
         success: false,
@@ -582,7 +631,8 @@ router.post(
       if (!previousStory) {
         return res.status(409).json({
           success: false,
-          message: "Previous episode must have completed voting.",
+          message:
+            "Previous episode must have completed voting.",
         });
       }
 
@@ -594,7 +644,8 @@ router.post(
       ) {
         return res.status(409).json({
           success: false,
-          message: "The official winning choice no longer matches this draft.",
+          message:
+            "The official winning choice no longer matches this draft.",
         });
       }
 
@@ -607,11 +658,13 @@ router.post(
       ) {
         return res.status(409).json({
           success: false,
-          message: "The draft does not match the expected story episode.",
+          message:
+            "The draft does not match the expected story episode.",
         });
       }
 
       // Prevent a second episode with the same series number.
+
       const duplicateEpisode = await Story.findOne({
         _id: { $ne: draft._id },
         seriesSlug: draft.seriesSlug,
@@ -622,11 +675,13 @@ router.post(
       if (duplicateEpisode) {
         return res.status(409).json({
           success: false,
-          message: "Another episode with this series number already exists.",
+          message:
+            "Another episode with this series number already exists.",
         });
       }
 
       // Open a fresh voting round.
+
       draft.status = "voting";
 
       draft.voters = [];
@@ -649,11 +704,16 @@ router.post(
 
       return res.json({
         success: true,
-        message: "Episode published. Community voting is now open.",
+        message:
+          "Episode published. Community voting is now open.",
         story: publicStory(draft),
       });
+
     } catch (error) {
-      console.error("Episode publishing error:", error);
+      console.error(
+        "Episode publishing error:",
+        error
+      );
 
       if (error.code === 11000) {
         return res.status(409).json({
