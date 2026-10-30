@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import "./App.css";
 import Admin from "./Admin";
@@ -8,15 +7,13 @@ const SERIES_SLUG = "the-message";
 
 function getVoterId() {
   const storageKey = "twisted-voter-id";
-
   let voterId = localStorage.getItem(storageKey);
 
   if (!voterId) {
-    if (typeof crypto !== "undefined" && crypto.randomUUID) {
-      voterId = crypto.randomUUID();
-    } else {
-      voterId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    }
+    voterId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     localStorage.setItem(storageKey, voterId);
   }
@@ -29,10 +26,7 @@ function getSavedVote(slug) {
     const saved = localStorage.getItem(`twisted-voted-${slug}`);
 
     if (!saved) return null;
-
-    if (saved === "true") {
-      return { round: "original" };
-    }
+    if (saved === "true") return { round: "original" };
 
     return JSON.parse(saved);
   } catch {
@@ -51,21 +45,35 @@ function getChoiceLetter(index) {
   return String.fromCharCode(65 + index);
 }
 
-function getChoiceDescription(index) {
-  const descriptions = [
-    "This is one possible direction for the story.",
-    "Your decision could change everything.",
-    "The community will decide what happens next.",
-    "Choose the path you want the story to follow.",
-  ];
-
-  return descriptions[index] || descriptions[0];
-}
-
 function sortEpisodes(episodes) {
   return [...episodes].sort(
     (a, b) => Number(a.episode || 0) - Number(b.episode || 0)
   );
+}
+
+function getReadingTime(content = "") {
+  const words = content.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words / 200));
+}
+
+function getEpisodeStatus(story) {
+  if (!story) {
+    return { label: "LOADING", className: "status-loading" };
+  }
+
+  if (story.runoffStatus === "voting") {
+    return { label: "RUNOFF LIVE", className: "status-runoff" };
+  }
+
+  if (story.status === "completed") {
+    return { label: "COMPLETED", className: "status-completed" };
+  }
+
+  if (story.status === "voting") {
+    return { label: "LIVE", className: "status-live" };
+  }
+
+  return { label: "AWAITING VOTES", className: "status-awaiting" };
 }
 
 function PublicApp() {
@@ -132,7 +140,43 @@ function PublicApp() {
     !alreadyVotedThisRound &&
     activeChoices.length > 0;
 
-  // Load all published episodes, including the original Episode 1.
+  const currentEpisodeIndex = stories.findIndex(
+    (episode) => episode.slug === selectedSlug
+  );
+
+  const previousEpisode =
+    currentEpisodeIndex > 0
+      ? stories[currentEpisodeIndex - 1]
+      : null;
+
+  const nextEpisode =
+    currentEpisodeIndex >= 0 &&
+    currentEpisodeIndex < stories.length - 1
+      ? stories[currentEpisodeIndex + 1]
+      : null;
+
+  const currentEpisodeNumber =
+    story?.episode || currentEpisodeIndex + 1 || 1;
+
+  const totalEpisodes = stories.length;
+
+  const episodeProgress =
+    totalEpisodes > 0
+      ? ((currentEpisodeIndex + 1) / totalEpisodes) * 100
+      : 0;
+
+  const episodeStatus = getEpisodeStatus(story);
+
+  const storyParagraphs = story?.content
+    ? story.content
+        .split(/\n\s*\n/)
+        .map((paragraph) => paragraph.trim())
+        .filter(Boolean)
+    : [];
+
+  const readingTime = getReadingTime(story?.content || "");
+
+  // Load all published episodes.
   useEffect(() => {
     let cancelled = false;
 
@@ -184,7 +228,7 @@ function PublicApp() {
               publishedEpisodes.push(firstEpisodeData.story);
             }
           } catch {
-            // Continue with episodes already retrieved.
+            // Continue with the episodes already retrieved.
           }
         }
 
@@ -352,6 +396,18 @@ function PublicApp() {
     setNotice("");
   }, [activeRound]);
 
+  function changeEpisode(slug) {
+    if (!slug) return;
+
+    setSelectedSlug(slug);
+    setSelected("");
+
+    document.getElementById("story")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
   async function handleVote() {
     if (!selected || !canVote || !story) return;
 
@@ -419,12 +475,8 @@ function PublicApp() {
   }
 
   function handleEpisodeChange(event) {
-    setSelectedSlug(event.target.value);
+    changeEpisode(event.target.value);
   }
-
-  const storyParagraphs = story?.content
-    ? story.content.split(/\n\s*\n/)
-    : [];
 
   return (
     <main>
@@ -439,7 +491,7 @@ function PublicApp() {
         </div>
 
         <a className="nav-button" href="#story">
-          Enter the story ↗
+          Enter the story <span>↗</span>
         </a>
       </nav>
 
@@ -456,13 +508,13 @@ function PublicApp() {
           </h1>
 
           <p className="hero-description">
-            Every decision changes what happens next. Vote with
-            everyone else and watch the story take a turn nobody
-            can take back.
+            Every decision changes what happens next. Read the
+            story, make your choice and discover what the community
+            decides.
           </p>
 
           <a className="primary-button" href="#story">
-            Make your choice ↓
+            Enter the story <span>↓</span>
           </a>
 
           <p className="hero-note">
@@ -471,6 +523,8 @@ function PublicApp() {
         </div>
 
         <div className="hero-art">
+          <div className="hero-art-glow" />
+
           <div className="door">
             <div className="door-panel" />
             <div className="door-handle" />
@@ -485,31 +539,75 @@ function PublicApp() {
       </section>
 
       <section className="story-section" id="story">
-        <div className="eyebrow">
-          THE MESSAGE — PSYCHOLOGICAL THRILLER
+        <div className="story-heading">
+          <div>
+            <p className="eyebrow">ENTER THE TWISTED UNIVERSE</p>
+            <h2>THE MESSAGE</h2>
+            <p className="story-heading-description">
+              One story. Every episode shaped by the community.
+            </p>
+          </div>
+
+          <div className="series-tag">
+            <span className="status-dot" />
+            INTERACTIVE SERIES
+          </div>
         </div>
 
-        <h2>{story?.title || "THE MESSAGE"}</h2>
+        <div className="episode-toolbar">
+          <div className="episode-navigation">
+            <label htmlFor="episode-select">
+              SELECT AN EPISODE
+            </label>
 
-        <div className="episode-navigation">
-          <label htmlFor="episode-select">
-            SELECT AN EPISODE
-          </label>
+            <select
+              id="episode-select"
+              className="episode-selector"
+              value={selectedSlug}
+              onChange={handleEpisodeChange}
+              disabled={stories.length === 0}
+            >
+              {stories.map((episode) => (
+                <option key={episode.slug} value={episode.slug}>
+                  Episode {episode.episode}: {episode.title}
+                </option>
+              ))}
+            </select>
+          </div>
 
-          <select
-            id="episode-select"
-            className="episode-selector"
-            value={selectedSlug}
-            onChange={handleEpisodeChange}
-            disabled={stories.length === 0}
-          >
-            {stories.map((episode) => (
-              <option key={episode.slug} value={episode.slug}>
-                Episode {episode.episode}: {episode.title}
-              </option>
-            ))}
-          </select>
+          {story && (
+            <div className="reading-meta">
+              <span>EPISODE {currentEpisodeNumber}</span>
+              <span className="meta-divider">·</span>
+              <span>{readingTime} MIN READ</span>
+            </div>
+          )}
         </div>
+
+        {story && totalEpisodes > 0 && currentEpisodeIndex >= 0 && (
+          <div className="episode-progress">
+            <div className="episode-progress-labels">
+              <span>YOUR JOURNEY</span>
+              <span>
+                EPISODE {currentEpisodeIndex + 1} OF {totalEpisodes}
+              </span>
+            </div>
+
+            <div
+              className="episode-progress-track"
+              role="progressbar"
+              aria-label="Episode progress"
+              aria-valuemin={0}
+              aria-valuemax={totalEpisodes}
+              aria-valuenow={currentEpisodeIndex + 1}
+            >
+              <span
+                className="episode-progress-fill"
+                style={{ width: `${episodeProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         {listError && (
           <p className="notice" role="alert">
@@ -520,12 +618,28 @@ function PublicApp() {
         <div className="story-layout">
           <article className="story-card">
             {loading ? (
-              <p>Loading episode...</p>
+              <div className="loading-state">
+                <span className="loading-spinner" />
+                <p>Opening the story...</p>
+              </div>
             ) : story ? (
               <>
-                <p className="story-time">
-                  EPISODE {story.episode}
-                </p>
+                <div className="story-card-top">
+                  <div>
+                    <p className="story-time">
+                      CHAPTER {story.episode}
+                    </p>
+                    <h3 className="story-card-title">
+                      {story.title}
+                    </h3>
+                  </div>
+
+                  <span
+                    className={`story-status ${episodeStatus.className}`}
+                  >
+                    {episodeStatus.label}
+                  </span>
+                </div>
 
                 {story.description && (
                   <p className="episode-description">
@@ -533,39 +647,59 @@ function PublicApp() {
                   </p>
                 )}
 
-                {storyParagraphs.length > 0 ? (
-                  storyParagraphs.map((paragraph, index) => (
-                    <p key={index}>{paragraph}</p>
-                  ))
-                ) : (
-                  <>
+                <div className="story-divider" />
+
+                <div className="story-content">
+                  {storyParagraphs.length > 0 ? (
+                    storyParagraphs.map((paragraph, index) => (
+                      <p key={index}>{paragraph}</p>
+                    ))
+                  ) : (
                     <p>
-                      You are home alone when your phone lights up.
+                      The story content is not available yet.
                     </p>
+                  )}
+                </div>
 
-                    <div className="message-box">
-                      <small>UNKNOWN NUMBER</small>
-                      <p>I'm you. Three days from now.</p>
-                    </div>
+                <div className="story-ending">
+                  <span>THE STORY CONTINUES...</span>
+                  <span>YOUR DECISION MATTERS</span>
+                </div>
 
-                    <p>
-                      You stare at the screen. Another message arrives.
-                    </p>
+                <div className="episode-navigation-buttons">
+                  <button
+                    type="button"
+                    className="episode-nav-button"
+                    disabled={!previousEpisode}
+                    onClick={() =>
+                      previousEpisode &&
+                      changeEpisode(previousEpisode.slug)
+                    }
+                  >
+                    <span>← PREVIOUS EPISODE</span>
+                    <strong>
+                      {previousEpisode
+                        ? `Episode ${previousEpisode.episode}: ${previousEpisode.title}`
+                        : "This is the first episode"}
+                    </strong>
+                  </button>
 
-                    <div className="message-box warning">
-                      <p>
-                        Whatever you do, don't open your bedroom door.
-                      </p>
-                    </div>
-
-                    <p>
-                      Before you can respond, three slow knocks echo
-                      through the house.
-                    </p>
-                  </>
-                )}
-
-                <h3>What happens next?</h3>
+                  <button
+                    type="button"
+                    className="episode-nav-button next"
+                    disabled={!nextEpisode}
+                    onClick={() =>
+                      nextEpisode && changeEpisode(nextEpisode.slug)
+                    }
+                  >
+                    <span>NEXT EPISODE →</span>
+                    <strong>
+                      {nextEpisode
+                        ? `Episode ${nextEpisode.episode}: ${nextEpisode.title}`
+                        : "You're at the latest episode"}
+                    </strong>
+                  </button>
+                </div>
               </>
             ) : (
               <p>This episode could not be loaded.</p>
@@ -573,18 +707,27 @@ function PublicApp() {
           </article>
 
           <aside className="vote-panel">
-            <p className="eyebrow">COMMUNITY DECISION</p>
+            <div className="vote-panel-heading">
+              <p className="eyebrow">COMMUNITY DECISION</p>
+
+              <span
+                className={`vote-live-indicator ${episodeStatus.className}`}
+              >
+                <span className="status-dot" />
+                {episodeStatus.label}
+              </span>
+            </div>
 
             <h3>
               {runoffActive
                 ? "The final decision."
-                : "Choose what happens next."}
+                : "What happens next?"}
             </h3>
 
             <p className="muted">
               {runoffActive
                 ? "The original vote ended in a tie. Cast your runoff vote to help decide the official story direction."
-                : "Your choice counts toward the community's decision about the next official episode."}
+                : "Choose the direction you want the story to take. The community decides which choice becomes official."}
             </p>
 
             {loading && (
@@ -616,16 +759,20 @@ function PublicApp() {
                 )}
 
                 <div className="vote-summary">
-                  <strong>
-                    {totalVotes.toLocaleString()}{" "}
-                    {totalVotes === 1 ? "vote" : "votes"}
-                  </strong>
+                  <div>
+                    <strong>
+                      {totalVotes.toLocaleString()}
+                    </strong>
+                    <span>
+                      {totalVotes === 1 ? " VOTE" : " VOTES"}
+                    </span>
+                  </div>
 
-                  <span className="muted">
+                  <small>
                     {runoffActive
-                      ? " in the runoff"
-                      : " in the original round"}
-                  </span>
+                      ? "RUNOFF ROUND"
+                      : "COMMUNITY TOTAL"}
+                  </small>
                 </div>
 
                 {officialWinner && (
@@ -641,7 +788,7 @@ function PublicApp() {
                 )}
 
                 {votingClosed && !officialWinner && (
-                  <div className="official-result">
+                  <div className="official-result tie-result">
                     <p className="eyebrow">VOTING CLOSED</p>
                     <h3>
                       {story.runoffStatus === "completed" &&
@@ -697,10 +844,6 @@ function PublicApp() {
                           </strong>
 
                           <small>
-                            {getChoiceDescription(index)}
-                          </small>
-
-                          <small>
                             {(Number(choice.votes) || 0).toLocaleString()}{" "}
                             {(Number(choice.votes) || 0) === 1
                               ? "vote"
@@ -719,7 +862,7 @@ function PublicApp() {
                           </span>
                         </span>
 
-                        <span>↗</span>
+                        <span className="choice-arrow">↗</span>
                       </button>
                     );
                   })}
@@ -753,7 +896,7 @@ function PublicApp() {
                 )}
 
                 {notice && (
-                  <p className="notice" role="status">
+                  <p className="notice success-notice" role="status">
                     {notice}
                   </p>
                 )}
@@ -773,13 +916,9 @@ function PublicApp() {
                     </div>
                   )}
 
-                <button
-                  type="button"
-                  className="refresh-button"
-                  onClick={() => window.location.reload()}
-                >
-                  Refresh page ↻
-                </button>
+                <p className="vote-footer">
+                  Every vote helps shape the next official episode.
+                </p>
               </>
             )}
           </aside>
@@ -788,7 +927,6 @@ function PublicApp() {
 
       <section className="how-section" id="how-it-works">
         <p className="eyebrow">YOU ARE PART OF THE PLOT</p>
-
         <h2>THE CROWD DECIDES.</h2>
 
         <div className="steps">
@@ -810,7 +948,7 @@ function PublicApp() {
             <span>03</span>
             <h3>Discover</h3>
             <p>
-              The winning choice shapes the next chapter.
+              The winning choice shapes the next episode.
             </p>
           </article>
         </div>
@@ -830,7 +968,8 @@ function PublicApp() {
 }
 
 export default function App() {
-  const currentPath = window.location.pathname.replace(/\/+$/, "") || "/";
+  const currentPath =
+    window.location.pathname.replace(/\/+$/, "") || "/";
 
   if (currentPath === "/admin") {
     return <Admin />;

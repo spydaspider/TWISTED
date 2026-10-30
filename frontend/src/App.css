@@ -1,9 +1,5 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap");
 
-/* =========================
-   GLOBAL STYLES
-========================= */
-
 :root {
   font-family: "DM Sans", sans-serif;
   color: #f5f5f7;
@@ -48,7 +44,8 @@ body {
 
 body,
 button,
-a {
+a,
+select {
   font-family: "DM Sans", sans-serif;
 }
 
@@ -67,7 +64,8 @@ a {
 }
 
 button:focus-visible,
-a:focus-visible {
+a:focus-visible,
+select:focus-visible {
   outline: 2px solid var(--accent-light);
   outline-offset: 4px;
 }
@@ -77,9 +75,7 @@ a:focus-visible {
   background: rgba(255, 59, 92, 0.55);
 }
 
-/* =========================
-   NAVIGATION
-========================= */
+/* NAVIGATION */
 
 .navbar {
   position: sticky;
@@ -91,7 +87,7 @@ a:focus-visible {
   gap: 24px;
   min-height: 76px;
   padding: 16px 7%;
-  background: rgba(9, 9, 13, 0.88);
+  background: rgba(9, 9, 13, 0.9);
   border-bottom: 1px solid var(--border);
   backdrop-filter: blur(18px);
 }
@@ -129,25 +125,24 @@ a:focus-visible {
   border-radius: 8px;
   font-size: 0.85rem;
   font-weight: 700;
-  transition:
-    background 0.2s ease,
-    border-color 0.2s ease;
+  transition: background 0.2s ease;
 }
 
 .nav-button:hover {
   background: var(--surface-light);
-  border-color: rgba(255, 255, 255, 0.25);
 }
 
-/* =========================
-   BUTTONS
-========================= */
+.nav-button span {
+  color: var(--accent-light);
+}
+
+/* BUTTONS */
 
 .primary-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 9px;
   min-height: 48px;
   padding: 14px 22px;
   border: 1px solid transparent;
@@ -180,33 +175,7 @@ a:focus-visible {
   margin-top: 20px;
 }
 
-.refresh-button {
-  display: block;
-  width: 100%;
-  margin-top: 12px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition:
-    color 0.2s ease,
-    background 0.2s ease,
-    border-color 0.2s ease;
-}
-
-.refresh-button:hover {
-  color: white;
-  background: var(--surface-light);
-  border-color: rgba(255, 255, 255, 0.2);
-}
-
-/* =========================
-   HERO SECTION
-========================= */
+/* HERO */
 
 .hero {
   display: grid;
@@ -261,9 +230,7 @@ a:focus-visible {
   letter-spacing: 1.5px;
 }
 
-/* =========================
-   HERO ART / DOOR
-========================= */
+/* HERO ART */
 
 .hero-art {
   position: relative;
@@ -296,8 +263,18 @@ a:focus-visible {
   pointer-events: none;
 }
 
+.hero-art-glow {
+  position: absolute;
+  width: 250px;
+  height: 250px;
+  border-radius: 50%;
+  background: rgba(255, 59, 92, 0.13);
+  filter: blur(70px);
+}
+
 .door {
   position: relative;
+  z-index: 1;
   width: 220px;
   height: 330px;
   border: 8px solid #34313a;
@@ -351,13 +328,14 @@ a:focus-visible {
   right: 22px;
   bottom: 22px;
   left: 22px;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   gap: 7px;
   padding: 17px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(9, 9, 13, 0.82);
+  background: rgba(9, 9, 13, 0.88);
   backdrop-filter: blur(12px);
 }
 
@@ -373,9 +351,7 @@ a:focus-visible {
   letter-spacing: 1px;
 }
 
-/* =========================
-   STORY SECTION
-========================= */
+/* STORY SECTION */
 
 .story-section {
   padding: 100px 7%;
@@ -384,20 +360,111 @@ a:focus-visible {
   border-bottom: 1px solid var(--border);
 }
 
-.story-section > .eyebrow,
-.story-section > h2 {
+.story-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 25px;
   max-width: 1300px;
-  margin-right: auto;
-  margin-left: auto;
+  margin: 0 auto 35px;
 }
 
-.story-section > h2 {
-  margin-top: 0;
-  margin-bottom: 48px;
+.story-heading .eyebrow {
+  margin-bottom: 12px;
+}
+
+.story-heading h2 {
+  margin: 0;
   font-family: "Space Grotesk", sans-serif;
   font-size: clamp(2.5rem, 5vw, 4.5rem);
   font-weight: 800;
   letter-spacing: -2px;
+  line-height: 1.05;
+}
+
+.story-heading-description {
+  margin: 13px 0 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.series-tag {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 15px;
+  border: 1px solid var(--border);
+  border-radius: 30px;
+  color: #d1d1da;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 12px rgba(110, 231, 160, 0.55);
+}
+
+.episode-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  max-width: 1300px;
+  margin: 0 auto 25px;
+}
+
+.episode-navigation {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  width: min(100%, 420px);
+}
+
+.episode-navigation label {
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 1.5px;
+  font-weight: 800;
+}
+
+.episode-selector {
+  width: 100%;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.17);
+  border-radius: 8px;
+  background: #15151c;
+  color: white;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.episode-selector option {
+  background: #15151c;
+  color: white;
+}
+
+.reading-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 13px;
+  color: #aaaab5;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.meta-divider {
+  color: var(--accent);
 }
 
 .story-layout {
@@ -420,72 +487,193 @@ a:focus-visible {
 
 .story-card {
   color: #d6d6df;
-  font-size: 1rem;
-  line-height: 1.9;
+}
+
+.story-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 15px;
 }
 
 .story-time {
-  margin-top: 0;
+  margin: 0 0 10px;
   color: var(--accent-light);
   font-family: "Space Grotesk", sans-serif;
-  font-size: 1rem;
-  font-weight: 700;
+  font-size: 0.72rem;
+  font-weight: 800;
   letter-spacing: 2px;
 }
 
-.message-box {
-  margin: 24px 0;
-  padding: 20px 22px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-left: 3px solid #81818f;
-  border-radius: 6px;
-  background: #18181f;
+.story-card-title {
+  margin: 0;
+  color: white;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.5rem;
+  letter-spacing: -0.5px;
+  line-height: 1.3;
 }
 
-.message-box small {
-  color: #a3a3b0;
-  font-size: 0.68rem;
+.story-status {
+  padding: 7px 10px;
+  border: 1px solid rgba(110, 231, 160, 0.25);
+  border-radius: 30px;
+  color: var(--green);
+  font-size: 0.62rem;
   font-weight: 800;
-  letter-spacing: 1.4px;
+  letter-spacing: 1px;
+  white-space: nowrap;
 }
 
-.message-box p {
+.episode-description {
+  margin: 22px 0;
+  color: #aaaab5;
+  font-size: 0.93rem;
+  font-style: italic;
+  line-height: 1.8;
+}
+
+.story-divider {
+  height: 1px;
+  margin: 24px 0;
+  background: var(--border);
+}
+
+.story-content {
+  color: #dedee5;
+  font-size: 1.04rem;
+  line-height: 2;
+}
+
+.story-content p {
+  margin: 0 0 22px;
+  white-space: pre-wrap;
+}
+
+.story-content p:last-child {
   margin-bottom: 0;
+}
+
+.story-ending {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 35px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  color: #777782;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+}
+
+.story-ending span:first-child {
+  color: var(--accent-light);
+}
+
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 250px;
+  gap: 15px;
+  color: var(--muted);
+}
+
+.loading-spinner {
+  width: 27px;
+  height: 27px;
+  border: 3px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* EPISODE NAVIGATION */
+
+.episode-navigation-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 35px;
+}
+
+.episode-nav-button {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #17171e;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+.episode-nav-button:hover:not(:disabled) {
+  border-color: rgba(255, 59, 92, 0.5);
+  background: #20171e;
+}
+
+.episode-nav-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.episode-nav-button span {
+  color: var(--accent-light);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 1.3px;
+}
+
+.episode-nav-button strong {
   color: white;
-  font-family: "Space Grotesk", sans-serif;
-  font-size: 1.2rem;
-  font-weight: 600;
-  line-height: 1.6;
+  font-size: 0.85rem;
 }
 
-.message-box.warning {
-  border-left-color: var(--accent);
-  background: rgba(255, 59, 92, 0.06);
+.episode-nav-button.next {
+  text-align: right;
 }
 
-.message-box.warning p {
-  color: #ffb9c5;
-}
-
-.story-card h3 {
-  margin-top: 32px;
-  color: white;
-  font-family: "Space Grotesk", sans-serif;
-  font-size: 1.55rem;
-  line-height: 1.5;
-}
-
-/* =========================
-   VOTE PANEL
-========================= */
+/* VOTING PANEL */
 
 .vote-panel {
   position: sticky;
   top: 100px;
 }
 
-.vote-panel > .eyebrow {
+.vote-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.vote-panel > .vote-panel-heading .eyebrow {
   margin-bottom: 12px;
+}
+
+.vote-live-indicator {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #c9c9d2;
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 1px;
+  white-space: nowrap;
 }
 
 .vote-panel > h3 {
@@ -503,22 +691,43 @@ a:focus-visible {
 }
 
 .vote-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin: 24px 0 17px;
-  padding: 15px;
+  padding: 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #17171e;
-  font-size: 0.9rem;
+}
+
+.vote-summary div {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
 }
 
 .vote-summary strong {
   color: white;
-  font-size: 1.1rem;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.5rem;
 }
 
-/* =========================
-   CHOICES
-========================= */
+.vote-summary div span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.vote-summary small {
+  color: var(--accent-light);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+/* CHOICES */
 
 .choices {
   display: flex;
@@ -588,7 +797,7 @@ a:focus-visible {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 7px;
+  gap: 9px;
   min-width: 0;
 }
 
@@ -605,7 +814,7 @@ a:focus-visible {
   line-height: 1.5;
 }
 
-.choice > span:last-child {
+.choice-arrow {
   margin-top: 5px;
   color: #777782;
 }
@@ -628,9 +837,7 @@ a:focus-visible {
   transition: width 0.4s ease;
 }
 
-/* =========================
-   RUNOFF / OFFICIAL RESULT
-========================= */
+/* RESULTS */
 
 .runoff-results {
   margin: 18px 0;
@@ -687,6 +894,15 @@ a:focus-visible {
   line-height: 1.7;
 }
 
+.tie-result {
+  border-color: rgba(255, 184, 77, 0.3);
+  background: rgba(255, 184, 77, 0.05);
+}
+
+.tie-result .eyebrow {
+  color: #ffd18b;
+}
+
 .choice.winning-choice {
   border-color: rgba(110, 231, 160, 0.45);
 }
@@ -700,9 +916,15 @@ a:focus-visible {
   background: linear-gradient(90deg, #36b979, #6ee7a0);
 }
 
-/* =========================
-   NOTICES AND ERRORS
-========================= */
+.vote-footer {
+  margin: 18px 0 0;
+  color: #777782;
+  font-size: 0.74rem;
+  line-height: 1.7;
+  text-align: center;
+}
+
+/* NOTICES */
 
 .notice {
   margin: 15px 0;
@@ -722,15 +944,14 @@ p.notice[role="alert"] {
   color: #ffb3c0;
 }
 
-p.notice[role="status"] {
+p.notice[role="status"],
+.success-notice {
   border-color: rgba(110, 231, 160, 0.25);
   background: rgba(110, 231, 160, 0.06);
   color: #a9f0c5;
 }
 
-/* =========================
-   HOW IT WORKS
-========================= */
+/* HOW IT WORKS */
 
 .how-section {
   padding: 100px 7%;
@@ -788,9 +1009,7 @@ p.notice[role="status"] {
   line-height: 1.8;
 }
 
-/* =========================
-   FOOTER
-========================= */
+/* FOOTER */
 
 .footer {
   display: flex;
@@ -818,9 +1037,7 @@ p.notice[role="status"] {
   text-align: center;
 }
 
-/* =========================
-   TABLET RESPONSIVENESS
-========================= */
+/* TABLET */
 
 @media (max-width: 1000px) {
   .hero {
@@ -854,9 +1071,7 @@ p.notice[role="status"] {
   }
 }
 
-/* =========================
-   MOBILE NAVIGATION
-========================= */
+/* MOBILE */
 
 @media (max-width: 700px) {
   .navbar {
@@ -879,8 +1094,6 @@ p.notice[role="status"] {
   .nav-button {
     display: none;
   }
-
-  /* HERO */
 
   .hero {
     grid-template-columns: 1fr;
@@ -907,15 +1120,28 @@ p.notice[role="status"] {
     height: 295px;
   }
 
-  /* STORY */
-
   .story-section {
     padding: 70px 5%;
   }
 
-  .story-section > h2 {
-    margin-bottom: 30px;
+  .story-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .story-heading h2 {
     font-size: clamp(2.5rem, 10vw, 3.5rem);
+  }
+
+  .episode-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .reading-meta {
+    padding-bottom: 0;
   }
 
   .story-layout {
@@ -931,11 +1157,10 @@ p.notice[role="status"] {
     position: static;
   }
 
-  .story-card h3 {
-    font-size: 1.35rem;
+  .story-content {
+    font-size: 1rem;
+    line-height: 1.9;
   }
-
-  /* STEPS */
 
   .how-section {
     padding: 70px 6%;
@@ -950,8 +1175,6 @@ p.notice[role="status"] {
     padding: 24px;
   }
 
-  /* FOOTER */
-
   .footer {
     flex-direction: column;
     gap: 10px;
@@ -964,9 +1187,7 @@ p.notice[role="status"] {
   }
 }
 
-/* =========================
-   SMALL MOBILE SCREENS
-========================= */
+/* SMALL MOBILE */
 
 @media (max-width: 420px) {
   .navbar {
@@ -1016,6 +1237,19 @@ p.notice[role="status"] {
     padding: 18px;
   }
 
+  .story-card-title {
+    font-size: 1.25rem;
+  }
+
+  .story-content {
+    font-size: 0.96rem;
+    line-height: 1.85;
+  }
+
+  .story-ending {
+    flex-direction: column;
+  }
+
   .choice {
     gap: 10px;
     padding: 13px;
@@ -1039,39 +1273,232 @@ p.notice[role="status"] {
   .runoff-results {
     padding: 16px;
   }
+
+  .vote-summary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
 }
-.episode-navigation {
+/* =========================================
+   TWISTED EPISODE PROGRESS
+========================================= */
+
+.episode-progress {
+  max-width: 1300px;
+  margin: 0 auto 28px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #131319;
+}
+
+.episode-progress-labels {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 25px 0;
-  max-width: 420px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 0.67rem;
+  font-weight: 800;
+  letter-spacing: 1.2px;
 }
 
-.episode-navigation label {
-  font-size: 11px;
-  letter-spacing: 2px;
-  font-weight: 700;
+.episode-progress-labels span:last-child {
+  color: var(--accent-light);
+  text-align: right;
 }
 
-.episode-selector {
+.episode-progress-track {
   width: 100%;
-  padding: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  background: #111;
-  color: #fff;
-  font-size: 14px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 20px;
+  background: #303039;
+}
+
+.episode-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), #ff8294);
+  transition: width 0.5s ease;
+}
+
+/* =========================================
+   EPISODE STATUS VARIATIONS
+========================================= */
+
+.story-status.status-live {
+  border-color: rgba(110, 231, 160, 0.3);
+  background: rgba(110, 231, 160, 0.06);
+  color: var(--green);
+}
+
+.story-status.status-runoff {
+  border-color: rgba(255, 184, 77, 0.35);
+  background: rgba(255, 184, 77, 0.07);
+  color: #ffd18b;
+}
+
+.story-status.status-completed {
+  border-color: rgba(150, 160, 255, 0.3);
+  background: rgba(150, 160, 255, 0.07);
+  color: #b5bbff;
+}
+
+.story-status.status-awaiting {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: #c4c4cf;
+}
+
+.story-status.status-loading {
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.vote-live-indicator.status-runoff {
+  color: #ffd18b;
+}
+
+.vote-live-indicator.status-completed {
+  color: #b5bbff;
+}
+
+.vote-live-indicator.status-awaiting {
+  color: #c4c4cf;
+}
+
+.vote-live-indicator.status-completed .status-dot,
+.vote-live-indicator.status-awaiting .status-dot {
+  background: #9292a0;
+  box-shadow: none;
+}
+
+.vote-live-indicator.status-runoff .status-dot {
+  background: #ffbd66;
+  box-shadow: 0 0 12px rgba(255, 189, 102, 0.45);
+}
+
+/* =========================================
+   STORY READING IMPROVEMENTS
+========================================= */
+
+.story-card {
+  scroll-margin-top: 100px;
+}
+
+.story-content {
+  max-width: 680px;
+  margin: 0 auto;
+  font-size: 1.06rem;
+  line-height: 2;
+  letter-spacing: 0.01em;
+}
+
+.story-content p {
+  margin-bottom: 24px;
 }
 
 .episode-description {
-  opacity: 0.75;
-  line-height: 1.7;
-  margin-bottom: 25px;
+  padding-left: 15px;
+  border-left: 2px solid var(--accent);
+  line-height: 1.8;
 }
-/* =========================
-   REDUCED MOTION
-========================= */
+
+.story-ending {
+  align-items: center;
+}
+
+/* =========================================
+   IMPROVED EPISODE NAVIGATION
+========================================= */
+
+.episode-navigation-buttons {
+  margin-top: 40px;
+}
+
+.episode-nav-button {
+  min-height: 90px;
+  padding: 17px;
+}
+
+.episode-nav-button strong {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.episode-nav-button:disabled {
+  border-style: dashed;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.episode-nav-button:disabled strong {
+  color: #777782;
+}
+
+/* =========================================
+   RESPONSIVE EPISODE PROGRESS
+========================================= */
+
+@media (max-width: 700px) {
+  .episode-progress {
+    margin-bottom: 20px;
+    padding: 15px;
+  }
+
+  .episode-progress-labels {
+    font-size: 0.61rem;
+    letter-spacing: 0.8px;
+  }
+
+  .episode-navigation-buttons {
+    gap: 9px;
+    margin-top: 30px;
+  }
+
+  .episode-nav-button {
+    min-height: 95px;
+    padding: 12px;
+  }
+
+  .episode-nav-button span {
+    font-size: 0.57rem;
+  }
+
+  .episode-nav-button strong {
+    font-size: 0.77rem;
+  }
+
+  .story-content {
+    font-size: 1rem;
+    line-height: 1.9;
+  }
+}
+
+@media (max-width: 380px) {
+  .episode-progress-labels {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .episode-progress-labels span:last-child {
+    text-align: left;
+  }
+
+  .episode-navigation-buttons {
+    grid-template-columns: 1fr;
+  }
+
+  .episode-nav-button.next {
+    text-align: left;
+  }
+}
+
+/* REDUCED MOTION */
 
 @media (prefers-reduced-motion: reduce) {
   *,

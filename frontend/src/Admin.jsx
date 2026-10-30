@@ -1,8 +1,9 @@
-
 import { useCallback, useEffect, useState } from "react";
 import "./Admin.css";
 
 const API_URL = "http://localhost:5000/api";
+const MIN_EPISODE_WORDS = 100;
+const MAX_EPISODE_WORDS = 180;
 
 async function apiRequest(path, options = {}) {
   const response = await fetch(`${API_URL}${path}`, {
@@ -27,6 +28,173 @@ function getStoryFromResponse(data) {
   return data.draft || data.story || data.episode || data;
 }
 
+function getWordCount(content = "") {
+  const trimmed = content.trim();
+  return trimmed ? trimmed.split(/\s+/).length : 0;
+}
+
+function getOfficialWinner(story) {
+  if (!story) return null;
+
+  const winnerId =
+    story.runoffWinningChoiceId || story.winningChoiceId;
+
+  if (!winnerId) return null;
+
+  const allChoices = [
+    ...(story.choices || []),
+    ...(story.runoffChoices || []),
+  ];
+
+  return (
+    allChoices.find((choice) => choice.id === winnerId) || {
+      id: winnerId,
+      title: winnerId,
+    }
+  );
+}
+
+function getVoteTotal(choices = []) {
+  return choices.reduce(
+    (total, choice) => total + (Number(choice.votes) || 0),
+    0
+  );
+}
+
+function getVotePercentage(votes, total) {
+  if (!total) return 0;
+  return Math.round(((Number(votes) || 0) / total) * 100);
+}
+
+function getStatusLabel(story) {
+  if (!story) return "Unknown";
+
+  if (story.status === "draft") return "Draft";
+
+  if (story.runoffStatus === "voting") {
+    return "Runoff live";
+  }
+
+  if (story.status === "completed") {
+    return "Completed";
+  }
+
+  if (story.status === "voting") {
+    return "Live voting";
+  }
+
+  return story.status || "Unknown";
+}
+
+function getStatusClass(story) {
+  if (!story) return "unknown";
+
+  if (story.status === "draft") return "draft";
+
+  if (story.runoffStatus === "voting") return "runoff";
+
+  return story.status || "unknown";
+}
+
+function getDraftValidation(draft) {
+  if (!draft) return [];
+
+  const errors = [];
+  const wordCount = getWordCount(draft.content || "");
+  const choices = draft.choices || [];
+
+  if (!draft.title?.trim()) {
+    errors.push("Add an episode title.");
+  }
+
+  if (!draft.description?.trim()) {
+    errors.push("Add a short episode description.");
+  }
+
+  if (wordCount < MIN_EPISODE_WORDS) {
+    errors.push(
+      `The story needs at least ${MIN_EPISODE_WORDS} words. It currently has ${wordCount}.`
+    );
+  }
+
+  if (wordCount > MAX_EPISODE_WORDS) {
+    errors.push(
+      `The story must not exceed ${MAX_EPISODE_WORDS} words. It currently has ${wordCount}.`
+    );
+  }
+
+  if (choices.length !== 3) {
+    errors.push("An episode must have exactly 3 voting choices.");
+  }
+
+  if (choices.some((choice) => !choice.title?.trim())) {
+    errors.push("All 3 voting choices must have text.");
+  }
+
+  return errors;
+}
+
+function getDraftPayload(draft) {
+  return {
+    title: draft.title,
+    genre: draft.genre,
+    description: draft.description,
+    content: draft.content,
+    choices: (draft.choices || []).map((choice) => ({
+      id: choice.id,
+      title: choice.title,
+    })),
+  };
+}
+
+function VoteResults({ title, choices = [], winnerId }) {
+  const total = getVoteTotal(choices);
+
+  return (
+    <div className="admin-voting-block">
+      <div className="admin-voting-heading">
+        <h3>{title}</h3>
+        <span>{total} total votes</span>
+      </div>
+
+      {choices.length === 0 ? (
+        <p className="admin-muted">No voting choices are available.</p>
+      ) : (
+        <div className="admin-vote-list">
+          {choices.map((choice) => {
+            const votes = Number(choice.votes) || 0;
+            const percentage = getVotePercentage(votes, total);
+            const isWinner = winnerId === choice.id;
+
+            return (
+              <div className="admin-vote-result" key={choice.id}>
+                <div className="admin-vote-row">
+                  <span>
+                    {choice.title}
+                    {isWinner && (
+                      <span className="admin-winner-inline"> · WINNER</span>
+                    )}
+                  </span>
+                  <strong>
+                    {votes} <small>({percentage}%)</small>
+                  </strong>
+                </div>
+
+                <div className="admin-vote-track">
+                  <div
+                    className="admin-vote-fill"
+                    style={{ width: `${percentage}%` }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Admin() {
   const [authenticated, setAuthenticated] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
@@ -46,6 +214,9 @@ export default function Admin() {
   const selectedStory = stories.find(
     (story) => story.slug === selectedSlug
   );
+
+  const draftWordCount = getWordCount(draft?.content || "");
+  const draftValidationErrors = getDraftValidation(draft);
 
   const loadStories = useCallback(async () => {
     const data = await apiRequest("/admin/stories");
@@ -123,10 +294,12 @@ export default function Admin() {
         });
 
         setStories(list);
+
         setSelectedSlug((current) => {
           if (current && list.some((story) => story.slug === current)) {
             return current;
           }
+
           return list[0]?.slug || "";
         });
       } catch (err) {
@@ -135,6 +308,7 @@ export default function Admin() {
     }
 
     refresh();
+
     const intervalId = window.setInterval(refresh, 15000);
 
     return () => {
@@ -224,7 +398,12 @@ export default function Admin() {
 
       setDraft(generated);
       setDraftSlug(generated.slug);
-      setNotice(data.message || "Your AI episode draft has been generated. Review it before publishing.");
+
+      setNotice(
+        data.message ||
+          "Your AI episode draft has been generated. Review its length and content before publishing."
+      );
+
       await loadStories();
     } catch (err) {
       setError(err.message);
@@ -244,6 +423,10 @@ export default function Admin() {
       );
 
       const loadedDraft = getStoryFromResponse(data);
+
+      if (!loadedDraft || !loadedDraft.slug) {
+        throw new Error("The server did not return a valid draft.");
+      }
 
       setDraft(loadedDraft);
       setDraftSlug(slug);
@@ -265,38 +448,11 @@ export default function Admin() {
   function updateChoice(index, value) {
     setDraft((current) => {
       const choices = [...(current.choices || [])];
+
       choices[index] = {
         ...choices[index],
         title: value,
       };
-
-      return { ...current, choices };
-    });
-  }
-
-  function addChoice() {
-    setDraft((current) => {
-      const choices = [...(current.choices || [])];
-
-      if (choices.length >= 4) return current;
-
-      choices.push({
-        id: `option-${choices.length + 1}`,
-        title: "",
-        votes: 0,
-      });
-
-      return { ...current, choices };
-    });
-  }
-
-  function removeChoice(index) {
-    setDraft((current) => {
-      const choices = [...(current.choices || [])];
-
-      if (choices.length <= 2) return current;
-
-      choices.splice(index, 1);
 
       return { ...current, choices };
     });
@@ -310,27 +466,19 @@ export default function Admin() {
     setNotice("");
 
     try {
-      const payload = {
-        title: draft.title,
-        genre: draft.genre,
-        description: draft.description,
-        content: draft.content,
-        choices: (draft.choices || []).map((choice) => ({
-          id: choice.id,
-          title: choice.title,
-        })),
-      };
-
       const data = await apiRequest(
         `/admin/episodes/${encodeURIComponent(draftSlug)}`,
         {
           method: "PUT",
-          body: JSON.stringify(payload),
+          body: JSON.stringify(getDraftPayload(draft)),
         }
       );
 
       const savedDraft = getStoryFromResponse(data);
-      if (savedDraft && savedDraft.slug) setDraft(savedDraft);
+
+      if (savedDraft && savedDraft.slug) {
+        setDraft(savedDraft);
+      }
 
       setNotice(data.message || "Draft saved successfully.");
       await loadStories();
@@ -342,10 +490,20 @@ export default function Admin() {
   }
 
   async function publishDraft() {
-    if (!draftSlug) return;
+    if (!draft || !draftSlug) return;
+
+    const validationErrors = getDraftValidation(draft);
+
+    if (validationErrors.length > 0) {
+      setError(
+        `This episode is not ready to publish:\n${validationErrors.join("\n")}`
+      );
+      setNotice("");
+      return;
+    }
 
     const confirmed = window.confirm(
-      "Publish this episode? It will become visible on the public website and voting will begin."
+      "Publish this episode? Your latest edits will be saved first. It will become visible on the public website and voting will begin."
     );
 
     if (!confirmed) return;
@@ -355,6 +513,15 @@ export default function Admin() {
     setNotice("");
 
     try {
+      // Save the latest editor contents before publishing.
+      await apiRequest(
+        `/admin/episodes/${encodeURIComponent(draftSlug)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(getDraftPayload(draft)),
+        }
+      );
+
       const data = await apiRequest(
         `/admin/episodes/${encodeURIComponent(draftSlug)}/publish`,
         { method: "POST" }
@@ -363,6 +530,7 @@ export default function Admin() {
       setNotice(data.message || "Episode published. Voting is now open.");
       setDraft(null);
       setDraftSlug("");
+
       await loadStories();
     } catch (err) {
       setError(err.message);
@@ -420,6 +588,38 @@ export default function Admin() {
     );
   }
 
+  const totalEpisodes = stories.length;
+  const liveEpisodes = stories.filter(
+    (story) =>
+      story.status === "voting" || story.runoffStatus === "voting"
+  ).length;
+  const completedEpisodes = stories.filter(
+    (story) => story.status === "completed"
+  ).length;
+  const draftEpisodes = stories.filter(
+    (story) => story.status === "draft"
+  ).length;
+
+  const officialWinner = getOfficialWinner(selectedStory);
+
+  const canCloseOriginalVoting =
+    selectedStory?.status === "voting" &&
+    selectedStory?.runoffStatus !== "voting";
+
+  const canStartRunoff =
+    selectedStory?.status === "completed" &&
+    selectedStory?.runoffStatus !== "voting" &&
+    !selectedStory?.runoffWinningChoiceId &&
+    (selectedStory?.tiedChoiceIds || []).length > 1;
+
+  const canCloseRunoff =
+    selectedStory?.runoffStatus === "voting";
+
+  const canGenerateNextEpisode =
+    selectedStory?.status === "completed" &&
+    selectedStory?.runoffStatus !== "voting" &&
+    Boolean(officialWinner);
+
   return (
     <main className="admin-page">
       <header className="admin-header">
@@ -432,6 +632,7 @@ export default function Admin() {
           <a href="/" className="admin-public-link">
             View public website ↗
           </a>
+
           <button
             className="admin-logout"
             onClick={handleLogout}
@@ -454,28 +655,44 @@ export default function Admin() {
 
           <button
             className="admin-secondary"
-            onClick={() => loadStories().catch((err) => setError(err.message))}
+            onClick={() =>
+              loadStories().catch((err) => setError(err.message))
+            }
             disabled={busy}
           >
             ↻ Refresh stories
           </button>
         </div>
 
-        {notice && <p className="admin-alert admin-alert-success">{notice}</p>}
-        {error && <p className="admin-alert admin-alert-error">{error}</p>}
+        {notice && (
+          <p className="admin-alert admin-alert-success">{notice}</p>
+        )}
+
+        {error && (
+          <p className="admin-alert admin-alert-error admin-alert-multiline">
+            {error}
+          </p>
+        )}
 
         <section className="admin-stats">
           <article>
             <span>ALL EPISODES</span>
-            <strong>{stories.length}</strong>
+            <strong>{totalEpisodes}</strong>
           </article>
+
           <article>
-            <span>PUBLISHED</span>
-            <strong>{stories.filter((story) => story.status !== "draft").length}</strong>
+            <span>LIVE VOTING</span>
+            <strong>{liveEpisodes}</strong>
           </article>
+
+          <article>
+            <span>COMPLETED</span>
+            <strong>{completedEpisodes}</strong>
+          </article>
+
           <article>
             <span>DRAFTS</span>
-            <strong>{stories.filter((story) => story.status === "draft").length}</strong>
+            <strong>{draftEpisodes}</strong>
           </article>
         </section>
 
@@ -485,6 +702,9 @@ export default function Admin() {
               <div>
                 <p className="admin-eyebrow">LIBRARY</p>
                 <h2>Episodes</h2>
+                <p className="admin-muted">
+                  Select an episode to view its status and manage voting.
+                </p>
               </div>
             </div>
 
@@ -511,8 +731,11 @@ export default function Admin() {
                       <strong>{item.title}</strong>
                       <em>{item.genre || "Uncategorised"}</em>
                     </span>
-                    <span className={`admin-status status-${item.status}`}>
-                      {item.status || "unknown"}
+
+                    <span
+                      className={`admin-status status-${getStatusClass(item)}`}
+                    >
+                      {getStatusLabel(item)}
                     </span>
                   </button>
                 ))}
@@ -526,110 +749,110 @@ export default function Admin() {
                 <div className="admin-panel-heading">
                   <div>
                     <p className="admin-eyebrow">
-                      EPISODE {selectedStory.episode}
+                      EPISODE {selectedStory.episode || "—"}
                     </p>
                     <h2>{selectedStory.title}</h2>
                     <p className="admin-muted">
-                      {selectedStory.genre} · {selectedStory.slug}
+                      {selectedStory.genre || "Uncategorised"} ·{" "}
+                      {selectedStory.slug}
                     </p>
                   </div>
-                  <span className={`admin-status status-${selectedStory.status}`}>
-                    {selectedStory.status}
+
+                  <span
+                    className={`admin-status status-${getStatusClass(
+                      selectedStory
+                    )}`}
+                  >
+                    {getStatusLabel(selectedStory)}
                   </span>
                 </div>
 
                 <p className="admin-description">
-                  {selectedStory.description}
+                  {selectedStory.description || "No description available."}
                 </p>
 
-                <div className="admin-voting-block">
-                  <h3>Original voting</h3>
-                  {(selectedStory.choices || []).map((choice) => (
-                    <div className="admin-vote-row" key={choice.id}>
-                      <span>{choice.title}</span>
-                      <strong>{choice.votes || 0}</strong>
-                    </div>
-                  ))}
-                  <p className="admin-muted">
-                    Total: {(selectedStory.choices || []).reduce(
-                      (sum, choice) => sum + (Number(choice.votes) || 0), 0
-                    )} votes
-                  </p>
-                </div>
+                <VoteResults
+                  title="Original voting"
+                  choices={selectedStory.choices || []}
+                  winnerId={
+                    selectedStory.runoffWinningChoiceId
+                      ? null
+                      : selectedStory.winningChoiceId
+                  }
+                />
 
                 {selectedStory.runoffChoices?.length > 0 && (
-                  <div className="admin-voting-block">
-                    <h3>Runoff voting</h3>
-                    {(selectedStory.runoffChoices || []).map((choice) => (
-                      <div className="admin-vote-row" key={choice.id}>
-                        <span>{choice.title}</span>
-                        <strong>{choice.votes || 0}</strong>
-                      </div>
-                    ))}
-                    <p className="admin-muted">
-                      Runoff status: {selectedStory.runoffStatus || "not started"}
+                  <VoteResults
+                    title="Runoff voting"
+                    choices={selectedStory.runoffChoices}
+                    winnerId={selectedStory.runoffWinningChoiceId}
+                  />
+                )}
+
+                {officialWinner ? (
+                  <div className="admin-winner">
+                    <span>OFFICIAL STORY DIRECTION</span>
+                    <strong>{officialWinner.title}</strong>
+                    <p>
+                      This is the community decision that should guide the
+                      next episode.
                     </p>
                   </div>
-                )}
-
-                {selectedStory.runoffWinningChoiceId && (
-                  <div className="admin-winner">
-                    <span>OFFICIAL DIRECTION</span>
-                    <strong>
-                      {[
-                        ...(selectedStory.choices || []),
-                        ...(selectedStory.runoffChoices || []),
-                      ].find(
-                        (choice) =>
-                          choice.id === selectedStory.runoffWinningChoiceId
-                      )?.title || selectedStory.runoffWinningChoiceId}
-                    </strong>
+                ) : selectedStory.status === "completed" ? (
+                  <div className="admin-no-winner">
+                    <strong>No official winner recorded yet.</strong>
+                    <p>
+                      Check the voting results or complete the runoff before
+                      generating the next episode.
+                    </p>
                   </div>
-                )}
+                ) : null}
 
                 <div className="admin-actions">
-                  {selectedStory.status !== "completed" &&
-                    selectedStory.runoffStatus !== "voting" && (
-                      <button
-                        className="admin-secondary"
-                        disabled={busy}
-                        onClick={() =>
-                          performAction(
-                            "Closing voting",
-                            `/stories/${encodeURIComponent(selectedStory.slug)}/close-voting`
-                          )
-                        }
-                      >
-                        Close original voting
-                      </button>
-                    )}
+                  {canCloseOriginalVoting && (
+                    <button
+                      className="admin-secondary"
+                      disabled={busy}
+                      onClick={() =>
+                        performAction(
+                          "Closing voting",
+                          `/stories/${encodeURIComponent(
+                            selectedStory.slug
+                          )}/close-voting`
+                        )
+                      }
+                    >
+                      Close original voting
+                    </button>
+                  )}
 
-                  {selectedStory.status === "completed" &&
-                    selectedStory.runoffStatus !== "voting" &&
-                    !selectedStory.runoffWinningChoiceId &&
-                    (selectedStory.tiedChoiceIds || []).length > 1 && (
-                      <button
-                        className="admin-secondary"
-                        disabled={busy}
-                        onClick={() =>
-                          performAction(
-                            "Starting runoff",
-                            `/stories/${encodeURIComponent(selectedStory.slug)}/runoff/start`
-                          )
-                        }
-                      >
-                        Start runoff
-                      </button>
-                    )}
+                  {canStartRunoff && (
+                    <button
+                      className="admin-secondary"
+                      disabled={busy}
+                      onClick={() =>
+                        performAction(
+                          "Starting runoff",
+                          `/stories/${encodeURIComponent(
+                            selectedStory.slug
+                          )}/runoff/start`
+                        )
+                      }
+                    >
+                      Start runoff
+                    </button>
+                  )}
 
-                  {selectedStory.runoffStatus === "voting" && (
+                  {canCloseRunoff && (
                     <button
                       className="admin-primary"
                       disabled={busy}
                       onClick={() =>
                         performAction(
                           "Closing runoff",
-                          `/stories/${encodeURIComponent(selectedStory.slug)}/runoff/close`
+                          `/stories/${encodeURIComponent(
+                            selectedStory.slug
+                          )}/runoff/close`
                         )
                       }
                     >
@@ -637,31 +860,45 @@ export default function Admin() {
                     </button>
                   )}
 
-                  {selectedStory.status === "completed" &&
-                    (selectedStory.runoffWinningChoiceId ||
-                      selectedStory.winningChoiceId) && (
-                      <button
-                        className="admin-primary"
-                        disabled={busy}
-                        onClick={generateEpisode}
-                      >
-                        ✦ Generate next episode with AI
-                      </button>
-                    )}
+                  {canGenerateNextEpisode && (
+                    <button
+                      className="admin-primary"
+                      disabled={busy}
+                      onClick={generateEpisode}
+                    >
+                      ✦ Generate next episode with AI
+                    </button>
+                  )}
                 </div>
 
                 {selectedStory.status === "draft" && (
                   <button
-                    className="admin-secondary"
+                    className="admin-secondary admin-open-draft"
                     disabled={busy}
                     onClick={() => openDraft(selectedStory.slug)}
                   >
                     Open this draft for review
                   </button>
                 )}
+
+                {selectedStory.status === "voting" && (
+                  <p className="admin-help-text">
+                    Voting is currently open. Close voting to determine the
+                    community's official direction.
+                  </p>
+                )}
+
+                {selectedStory.runoffStatus === "voting" && (
+                  <p className="admin-help-text">
+                    A runoff is in progress. Close the runoff to determine the
+                    final community decision.
+                  </p>
+                )}
               </>
             ) : (
-              <p className="admin-muted">Select an episode to manage it.</p>
+              <p className="admin-muted">
+                Select an episode to manage it.
+              </p>
             )}
           </section>
         </div>
@@ -673,24 +910,38 @@ export default function Admin() {
                 <p className="admin-eyebrow">AI-GENERATED CONTENT</p>
                 <h2>Review episode draft</h2>
                 <p className="admin-muted">
-                  This episode is not public until you publish it.
+                  Review the story carefully. It will not appear publicly
+                  until you publish it.
                 </p>
               </div>
+
               <span className="admin-status status-draft">DRAFT</span>
+            </div>
+
+            <div className="admin-editor-guideline">
+              <strong>TWISTED SHORT STORY STANDARD</strong>
+              <span>
+                Aim for 100–180 words, with exactly 3 engaging choices.
+              </span>
             </div>
 
             <label htmlFor="draft-title">Episode title</label>
             <input
               id="draft-title"
               value={draft.title || ""}
-              onChange={(event) => updateDraft("title", event.target.value)}
+              onChange={(event) =>
+                updateDraft("title", event.target.value)
+              }
+              maxLength={100}
             />
 
             <label htmlFor="draft-genre">Genre</label>
             <input
               id="draft-genre"
               value={draft.genre || ""}
-              onChange={(event) => updateDraft("genre", event.target.value)}
+              onChange={(event) =>
+                updateDraft("genre", event.target.value)
+              }
             />
 
             <label htmlFor="draft-description">Short description</label>
@@ -698,50 +949,90 @@ export default function Admin() {
               id="draft-description"
               rows="3"
               value={draft.description || ""}
-              onChange={(event) => updateDraft("description", event.target.value)}
+              onChange={(event) =>
+                updateDraft("description", event.target.value)
+              }
             />
 
-            <label htmlFor="draft-content">Story content</label>
+            <div className="admin-content-label">
+              <label htmlFor="draft-content">Story content</label>
+
+              <span
+                className={`admin-word-count ${
+                  draftWordCount < MIN_EPISODE_WORDS ||
+                  draftWordCount > MAX_EPISODE_WORDS
+                    ? "word-count-warning"
+                    : "word-count-valid"
+                }`}
+              >
+                {draftWordCount} / {MAX_EPISODE_WORDS} words
+              </span>
+            </div>
+
             <textarea
               id="draft-content"
               className="admin-story-editor"
-              rows="18"
+              rows="14"
               value={draft.content || ""}
-              onChange={(event) => updateDraft("content", event.target.value)}
+              onChange={(event) =>
+                updateDraft("content", event.target.value)
+              }
+              placeholder="The short story episode will appear here..."
             />
+
+            <p className="admin-word-guidance">
+              {draftWordCount < MIN_EPISODE_WORDS
+                ? `Add ${MIN_EPISODE_WORDS - draftWordCount} more words to reach the minimum.`
+                : draftWordCount > MAX_EPISODE_WORDS
+                  ? `Remove ${draftWordCount - MAX_EPISODE_WORDS} words to meet the limit.`
+                  : "Word count is within the agreed episode length."}
+            </p>
 
             <div className="admin-choices-editor">
               <div className="admin-editor-subheading">
                 <h3>Voting choices</h3>
-                <button
-                  type="button"
-                  className="admin-text-button"
-                  onClick={addChoice}
-                  disabled={(draft.choices || []).length >= 4}
-                >
-                  + Add choice
-                </button>
+                <span>
+                  {(draft.choices || []).length} / 3 choices
+                </span>
               </div>
 
               {(draft.choices || []).map((choice, index) => (
                 <div className="admin-choice-edit-row" key={choice.id || index}>
+                  <span className="admin-choice-number">
+                    {String.fromCharCode(65 + index)}
+                  </span>
+
                   <input
                     value={choice.title || ""}
-                    onChange={(event) => updateChoice(index, event.target.value)}
+                    onChange={(event) =>
+                      updateChoice(index, event.target.value)
+                    }
                     aria-label={`Choice ${index + 1}`}
+                    placeholder={`Voting choice ${index + 1}`}
                   />
-                  <button
-                    type="button"
-                    className="admin-remove-choice"
-                    onClick={() => removeChoice(index)}
-                    disabled={(draft.choices || []).length <= 2}
-                    aria-label={`Remove choice ${index + 1}`}
-                  >
-                    ×
-                  </button>
                 </div>
               ))}
             </div>
+
+            {draftValidationErrors.length > 0 && (
+              <div className="admin-validation">
+                <strong>Review required before publishing</strong>
+                <ul>
+                  {draftValidationErrors.map((validationError) => (
+                    <li key={validationError}>{validationError}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {draftValidationErrors.length === 0 && (
+              <div className="admin-validation-success">
+                <strong>Draft meets the publishing checks.</strong>
+                <span>
+                  You can save your changes or publish this episode.
+                </span>
+              </div>
+            )}
 
             <div className="admin-actions admin-publish-actions">
               <button
@@ -755,9 +1046,13 @@ export default function Admin() {
               <button
                 className="admin-primary"
                 onClick={publishDraft}
-                disabled={busy || draftSaving}
+                disabled={
+                  busy ||
+                  draftSaving ||
+                  draftValidationErrors.length > 0
+                }
               >
-                Publish episode →
+                {busy ? "Publishing..." : "Publish episode →"}
               </button>
 
               <button
@@ -765,7 +1060,10 @@ export default function Admin() {
                 onClick={() => {
                   setDraft(null);
                   setDraftSlug("");
+                  setError("");
+                  setNotice("");
                 }}
+                disabled={busy || draftSaving}
               >
                 Close editor
               </button>
