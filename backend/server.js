@@ -7,9 +7,15 @@ const mongoose = require("mongoose");
 
 const Story = require("./models/Story");
 const episodeRoutes = require("./routes/episodeRoutes");
+const authRoutes = require("./routes/authRoutes");
+
+const { requireReader } = require("./middleware/readerAuth");
 
 const {
   isAdmin,
+  isAdminSecretRequest,
+  hasAdminActionHeader,
+  requiresAdminActionProtection,
   setAdminCookie,
   clearAdminCookie,
   verifyAdminSecret,
@@ -29,6 +35,19 @@ app.use(
       "http://localhost:5174",
     ],
     credentials: true,
+    methods: [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
+    ],
+    allowedHeaders: [
+      "Content-Type",
+      "X-Twisted-Admin-Action",
+      "X-Admin-Secret",
+    ],
   })
 );
 
@@ -36,26 +55,45 @@ app.use(express.json({ limit: "50kb" }));
 
 // =====================================
 // ADMIN REQUEST AUTHENTICATION
-// Used by the existing voting-management
-// routes. Supports both browser cookies
-// and the Postman admin-secret header.
 // =====================================
 
 function requireAdminRequest(req, res) {
-  if (isAdmin(req)) {
-    return true;
+  if (!process.env.ADMIN_SECRET) {
+    res.status(503).json({
+      success: false,
+      message: "ADMIN_SECRET is not configured.",
+    });
+
+    return false;
   }
 
-  res.status(
-    process.env.ADMIN_SECRET ? 401 : 503
-  ).json({
-    success: false,
-    message: process.env.ADMIN_SECRET
-      ? "Unauthorized"
-      : "ADMIN_SECRET is not configured",
-  });
+  if (!isAdmin(req)) {
+    res.status(401).json({
+      success: false,
+      message: "Your admin session is invalid or has expired.",
+    });
 
-  return false;
+    return false;
+  }
+
+  // Browser-based state-changing requests require
+  // the special protection header.
+  // Postman requests using x-admin-secret are exempt.
+
+  if (
+    requiresAdminActionProtection(req) &&
+    !isAdminSecretRequest(req) &&
+    !hasAdminActionHeader(req)
+  ) {
+    res.status(403).json({
+      success: false,
+      message: "Missing admin request protection header.",
+    });
+
+    return false;
+  }
+
+  return true;
 }
 
 // =====================================
@@ -69,7 +107,7 @@ app.post("/api/admin/login", (req, res) => {
   if (!process.env.ADMIN_SECRET) {
     return res.status(503).json({
       success: false,
-      message: "ADMIN_SECRET is not configured",
+      message: "ADMIN_SECRET is not configured.",
     });
   }
 
@@ -113,6 +151,10 @@ app.get("/api/admin/session", (req, res) => {
 // =====================================
 
 app.post("/api/admin/logout", (req, res) => {
+  if (!requireAdminRequest(req, res)) {
+    return;
+  }
+
   clearAdminCookie(res);
 
   return res.json({
@@ -125,8 +167,17 @@ app.post("/api/admin/logout", (req, res) => {
 // ADMIN EPISODE ROUTES
 // =====================================
 
+// =====================================
+// ADMIN EPISODE ROUTES
+// =====================================
+
 app.use("/api/admin", episodeRoutes);
 
+// =====================================
+// READER AUTHENTICATION ROUTES
+// =====================================
+
+app.use("/api/auth", authRoutes);
 // =====================================
 // INITIAL STORY
 // =====================================
@@ -176,6 +227,76 @@ function publicStory(story) {
     ...result,
     id: result.slug,
   };
+}
+
+// =====================================
+// ATOMIC VOTING RESULT CALCULATION
+// =====================================
+
+function buildVotingClosePipeline(
+  choicesField,
+  statusField,
+  winnerField,
+  tiedField
+) {
+  const choicesPath = `$${choicesField}`;
+
+  const maxVotes = {
+    $max: {
+      $map: {
+        input: choicesPath,
+        as: "choice",
+        in: {
+          $ifNull: ["$$choice.votes", 0],
+        },
+      },
+    },
+  };
+
+  const topChoices = {
+    $filter: {
+      input: choicesPath,
+      as: "choice",
+      cond: {
+        $eq: [
+          { $ifNull: ["$$choice.votes", 0] },
+          maxVotes,
+        ],
+      },
+    },
+  };
+
+  const topChoiceIds = {
+    $map: {
+      input: topChoices,
+      as: "choice",
+      in: "$$choice.id",
+    },
+  };
+
+  return [
+    {
+      $set: {
+        [statusField]: "completed",
+
+        [winnerField]: {
+          $cond: [
+            { $eq: [{ $size: topChoices }, 1] },
+            { $arrayElemAt: [topChoiceIds, 0] },
+            null,
+          ],
+        },
+
+        [tiedField]: {
+          $cond: [
+            { $gt: [{ $size: topChoices }, 1] },
+            topChoiceIds,
+            [],
+          ],
+        },
+      },
+    },
+  ];
 }
 
 // =====================================
@@ -246,16 +367,12 @@ app.get("/api/stories", async (req, res) => {
         id: story.slug,
       })),
     });
-
   } catch (error) {
-    console.error(
-      "Could not fetch stories:",
-      error
-    );
+    console.error("Could not fetch stories:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Could not retrieve stories",
+      message: "Could not retrieve stories.",
     });
   }
 });
@@ -277,7 +394,7 @@ app.get("/api/stories/:slug", async (req, res) => {
     if (!story) {
       return res.status(404).json({
         success: false,
-        message: "Story not found",
+        message: "Story not found.",
       });
     }
 
@@ -288,16 +405,12 @@ app.get("/api/stories/:slug", async (req, res) => {
         id: story.slug,
       },
     });
-
   } catch (error) {
-    console.error(
-      "Could not fetch story:",
-      error
-    );
+    console.error("Could not fetch story:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Could not retrieve story",
+      message: "Could not retrieve story.",
     });
   }
 });
@@ -307,24 +420,18 @@ app.get("/api/stories/:slug", async (req, res) => {
 // ORIGINAL ROUND OR ACTIVE RUNOFF
 // =====================================
 
-app.post("/api/stories/:slug/vote", async (req, res) => {
+app.post("/api/stories/:slug/vote", requireReader, async (req, res) => {
   try {
-    const { choiceId, voterId } = req.body || {};
+    const { choiceId } = req.body || {};
 
-    if (
-      typeof choiceId !== "string" ||
-      typeof voterId !== "string" ||
-      voterId.trim().length < 10 ||
-      voterId.length > 100
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A valid choiceId and voterId are required",
-      });
-    }
+if (typeof choiceId !== "string" || !choiceId.trim()) {
+  return res.status(400).json({
+    success: false,
+    message: "A valid choiceId is required.",
+  });
+}
 
-    const cleanVoterId = voterId.trim();
+const cleanVoterId = req.user._id.toString();
 
     const story = await Story.findOne({
       slug: req.params.slug,
@@ -334,17 +441,9 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
     if (!story) {
       return res.status(404).json({
         success: false,
-        message: "Story not found",
+        message: "Story not found.",
       });
     }
-
-    console.log("\n========== TWISTED VOTE DEBUG ==========");
-    console.log("Story:", story.slug);
-    console.log("Story ID:", story._id);
-    console.log("Original status:", story.status);
-    console.log("Runoff status:", story.runoffStatus);
-    console.log("Choice ID:", choiceId);
-    console.log("========================================\n");
 
     // =====================================
     // RUNOFF VOTING
@@ -353,14 +452,12 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
     if (story.runoffStatus === "voting") {
       const selectedChoice = (
         story.runoffChoices || []
-      ).find(
-        (choice) => choice.id === choiceId
-      );
+      ).find((choice) => choice.id === choiceId);
 
       if (!selectedChoice) {
         return res.status(400).json({
           success: false,
-          message: "Invalid runoff choice",
+          message: "Invalid runoff choice.",
         });
       }
 
@@ -403,7 +500,7 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
         return res.status(409).json({
           success: false,
           message:
-            "You have already voted in this runoff, or runoff voting has closed",
+            "You have already voted in this runoff, or runoff voting has closed.",
         });
       }
 
@@ -415,7 +512,7 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
 
       return res.json({
         success: true,
-        message: "Your runoff vote has been recorded",
+        message: "Your runoff vote has been recorded.",
         round: "runoff",
         story: publicStory(updatedStory),
       });
@@ -428,20 +525,18 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
     if (story.status !== "voting") {
       return res.status(409).json({
         success: false,
-        message: "Original voting is closed",
+        message: "Original voting is closed.",
       });
     }
 
     const selectedChoice = (
       story.choices || []
-    ).find(
-      (choice) => choice.id === choiceId
-    );
+    ).find((choice) => choice.id === choiceId);
 
     if (!selectedChoice) {
       return res.status(400).json({
         success: false,
-        message: "Invalid voting choice",
+        message: "Invalid voting choice.",
       });
     }
 
@@ -484,7 +579,7 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
       return res.status(409).json({
         success: false,
         message:
-          "You have already voted, or original voting has closed",
+          "You have already voted, or original voting has closed.",
       });
     }
 
@@ -496,27 +591,23 @@ app.post("/api/stories/:slug/vote", async (req, res) => {
 
     return res.json({
       success: true,
-      message: "Your vote has been recorded",
+      message: "Your vote has been recorded.",
       round: "original",
       story: publicStory(updatedStory),
     });
-
   } catch (error) {
-    console.error(
-      "Could not submit vote:",
-      error
-    );
+    console.error("Could not submit vote:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Could not submit your vote",
-      error: error.message,
+      message: "Could not submit your vote.",
     });
   }
 });
 
 // =====================================
 // CLOSE ORIGINAL VOTING
+// ATOMIC UPDATE
 // =====================================
 
 app.post(
@@ -527,21 +618,60 @@ app.post(
         return;
       }
 
-      const story = await Story.findOne({
+      const currentStory = await Story.findOne({
         slug: req.params.slug,
-      });
+      })
+        .select("status choices")
+        .lean();
 
-      if (!story) {
+      if (!currentStory) {
         return res.status(404).json({
           success: false,
-          message: "Story not found",
+          message: "Story not found.",
         });
       }
 
-      if (story.status !== "voting") {
+      if (currentStory.status !== "voting") {
         return res.status(409).json({
           success: false,
-          message: "Original voting is already closed",
+          message: "Original voting is already closed.",
+        });
+      }
+
+      const currentTotal = currentStory.choices.reduce(
+        (total, choice) => total + choice.votes,
+        0
+      );
+
+      if (currentTotal === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "At least one vote is required before closing.",
+        });
+      }
+
+      // The status check and result calculation happen
+      // atomically in MongoDB.
+      const story = await Story.findOneAndUpdate(
+        {
+          slug: req.params.slug,
+          status: "voting",
+        },
+        buildVotingClosePipeline(
+          "choices",
+          "status",
+          "winningChoiceId",
+          "tiedChoiceIds"
+        ),
+        {
+          new: true,
+        }
+      );
+
+      if (!story) {
+        return res.status(409).json({
+          success: false,
+          message: "Voting has already been closed.",
         });
       }
 
@@ -550,80 +680,47 @@ app.post(
         0
       );
 
-      if (totalVotes === 0) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "At least one vote is required before closing",
-        });
-      }
+      const winningChoice = story.winningChoiceId
+        ? story.choices.find(
+            (choice) => choice.id === story.winningChoiceId
+          )
+        : null;
 
-      const highestVoteCount = Math.max(
-        ...story.choices.map(
-          (choice) => choice.votes
-        )
+      const tiedChoices = story.choices.filter(
+        (choice) => story.tiedChoiceIds.includes(choice.id)
       );
-
-      const topChoices = story.choices.filter(
-        (choice) => choice.votes === highestVoteCount
-      );
-
-      story.winningChoiceId =
-        topChoices.length === 1
-          ? topChoices[0].id
-          : null;
-
-      story.tiedChoiceIds =
-        topChoices.length > 1
-          ? topChoices.map(
-              (choice) => choice.id
-            )
-          : [];
-
-      story.status = "completed";
-
-      await story.save();
 
       return res.json({
         success: true,
 
-        message:
-          topChoices.length === 1
-            ? "Voting closed. The winning choice has been selected."
-            : "Voting closed. The result is a tie.",
+        message: winningChoice
+          ? "Voting closed. The winning choice has been selected."
+          : "Voting closed. The result is a tie.",
 
         totalVotes,
 
-        winningChoice:
-          topChoices.length === 1
-            ? {
-                id: topChoices[0].id,
-                title: topChoices[0].title,
-                votes: topChoices[0].votes,
-              }
-            : null,
+        winningChoice: winningChoice
+          ? {
+              id: winningChoice.id,
+              title: winningChoice.title,
+              votes: winningChoice.votes,
+            }
+          : null,
 
-        tiedChoices:
-          topChoices.length > 1
-            ? topChoices.map((choice) => ({
-                id: choice.id,
-                title: choice.title,
-                votes: choice.votes,
-              }))
-            : [],
+        tiedChoices: tiedChoices.map((choice) => ({
+          id: choice.id,
+          title: choice.title,
+          votes: choice.votes,
+        })),
 
         story: publicStory(story),
       });
-
     } catch (error) {
-      console.error(
-        "Could not close voting:",
-        error
-      );
+      console.error("Could not close voting:", error);
 
       return res.status(500).json({
         success: false,
-        message: "Could not close voting",
+        message: "Could not close voting.",
       });
     }
   }
@@ -631,6 +728,7 @@ app.post(
 
 // =====================================
 // START RUNOFF
+// ATOMIC UPDATE
 // =====================================
 
 app.post(
@@ -641,86 +739,125 @@ app.post(
         return;
       }
 
-      const story = await Story.findOne({
+      const currentStory = await Story.findOne({
         slug: req.params.slug,
-      });
+      })
+        .select(
+          "status runoffStatus tiedChoiceIds choices"
+        )
+        .lean();
 
-      if (!story) {
+      if (!currentStory) {
         return res.status(404).json({
           success: false,
-          message: "Story not found",
+          message: "Story not found.",
         });
       }
 
-      if (story.status !== "completed") {
+      if (currentStory.status !== "completed") {
         return res.status(400).json({
           success: false,
-          message:
-            "Close the original voting round first",
+          message: "Close the original voting round first.",
         });
       }
 
-      if (story.runoffStatus !== "not_started") {
+      if (currentStory.runoffStatus !== "not_started") {
         return res.status(409).json({
           success: false,
           message:
-            "The runoff has already been started or completed",
+            "The runoff has already been started or completed.",
         });
       }
 
       if (
-        !story.tiedChoiceIds ||
-        story.tiedChoiceIds.length < 2
+        !currentStory.tiedChoiceIds ||
+        currentStory.tiedChoiceIds.length < 2
       ) {
         return res.status(400).json({
           success: false,
-          message: "There is no tie to resolve",
+          message: "There is no tie to resolve.",
         });
       }
 
-      const tiedChoices = story.choices.filter(
+      const tiedChoices = currentStory.choices.filter(
         (choice) =>
-          story.tiedChoiceIds.includes(choice.id)
+          currentStory.tiedChoiceIds.includes(choice.id)
       );
 
       if (tiedChoices.length < 2) {
         return res.status(400).json({
           success: false,
-          message: "Could not find the tied choices",
+          message: "Could not find the tied choices.",
         });
       }
 
-      story.runoffChoices = tiedChoices.map(
-        (choice) => ({
-          id: choice.id,
-          title: choice.title,
-          votes: 0,
-        })
+      // Build runoff choices from the original tied choices.
+      const runoffChoicesExpression = {
+        $map: {
+          input: {
+            $filter: {
+              input: "$choices",
+              as: "choice",
+              cond: {
+                $in: [
+                  "$$choice.id",
+                  { $ifNull: ["$tiedChoiceIds", []] },
+                ],
+              },
+            },
+          },
+          as: "choice",
+          in: {
+            id: "$$choice.id",
+            title: "$$choice.title",
+            votes: 0,
+          },
+        },
+      };
+
+      // Only one request can change not_started to voting.
+      const story = await Story.findOneAndUpdate(
+        {
+          slug: req.params.slug,
+          status: "completed",
+          runoffStatus: "not_started",
+          "tiedChoiceIds.1": { $exists: true },
+        },
+        [
+          {
+            $set: {
+              runoffChoices: runoffChoicesExpression,
+              runoffVoters: [],
+              runoffWinningChoiceId: null,
+              runoffTiedChoiceIds: [],
+              runoffStatus: "voting",
+            },
+          },
+        ],
+        {
+          new: true,
+        }
       );
 
-      story.runoffVoters = [];
-      story.runoffWinningChoiceId = null;
-      story.runoffTiedChoiceIds = [];
-      story.runoffStatus = "voting";
-
-      await story.save();
+      if (!story) {
+        return res.status(409).json({
+          success: false,
+          message: "The runoff has already been started.",
+        });
+      }
 
       return res.json({
         success: true,
-        message: "Runoff voting has started",
+        message: "Runoff voting has started.",
         runoffChoices: story.runoffChoices,
         story: publicStory(story),
       });
-
     } catch (error) {
-      console.error(
-        "Could not start runoff:",
-        error
-      );
+      console.error("Could not start runoff:", error);
 
       return res.status(500).json({
         success: false,
-        message: "Could not start runoff voting",
+        message: "Could not start runoff voting.",
       });
     }
   }
@@ -728,6 +865,7 @@ app.post(
 
 // =====================================
 // CLOSE RUNOFF
+// ATOMIC UPDATE
 // =====================================
 
 app.post(
@@ -738,21 +876,58 @@ app.post(
         return;
       }
 
-      const story = await Story.findOne({
+      const currentStory = await Story.findOne({
         slug: req.params.slug,
-      });
+      })
+        .select("runoffStatus runoffChoices")
+        .lean();
 
-      if (!story) {
+      if (!currentStory) {
         return res.status(404).json({
           success: false,
-          message: "Story not found",
+          message: "Story not found.",
         });
       }
 
-      if (story.runoffStatus !== "voting") {
+      if (currentStory.runoffStatus !== "voting") {
         return res.status(409).json({
           success: false,
-          message: "There is no active runoff to close",
+          message: "There is no active runoff to close.",
+        });
+      }
+
+      const currentTotal = currentStory.runoffChoices.reduce(
+        (total, choice) => total + choice.votes,
+        0
+      );
+
+      if (currentTotal === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "At least one runoff vote is required.",
+        });
+      }
+
+      const story = await Story.findOneAndUpdate(
+        {
+          slug: req.params.slug,
+          runoffStatus: "voting",
+        },
+        buildVotingClosePipeline(
+          "runoffChoices",
+          "runoffStatus",
+          "runoffWinningChoiceId",
+          "runoffTiedChoiceIds"
+        ),
+        {
+          new: true,
+        }
+      );
+
+      if (!story) {
+        return res.status(409).json({
+          success: false,
+          message: "Runoff voting has already been closed.",
         });
       }
 
@@ -761,80 +936,49 @@ app.post(
         0
       );
 
-      if (totalVotes === 0) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "At least one runoff vote is required",
-        });
-      }
+      const winningChoice = story.runoffWinningChoiceId
+        ? story.runoffChoices.find(
+            (choice) =>
+              choice.id === story.runoffWinningChoiceId
+          )
+        : null;
 
-      const highestVoteCount = Math.max(
-        ...story.runoffChoices.map(
-          (choice) => choice.votes
-        )
+      const tiedChoices = story.runoffChoices.filter(
+        (choice) =>
+          story.runoffTiedChoiceIds.includes(choice.id)
       );
-
-      const topChoices = story.runoffChoices.filter(
-        (choice) => choice.votes === highestVoteCount
-      );
-
-      story.runoffWinningChoiceId =
-        topChoices.length === 1
-          ? topChoices[0].id
-          : null;
-
-      story.runoffTiedChoiceIds =
-        topChoices.length > 1
-          ? topChoices.map(
-              (choice) => choice.id
-            )
-          : [];
-
-      story.runoffStatus = "completed";
-
-      await story.save();
 
       return res.json({
         success: true,
 
-        message:
-          topChoices.length === 1
-            ? "Runoff closed. The official story direction has been selected."
-            : "The runoff also ended in a tie. Another tie-resolution step is needed.",
+        message: winningChoice
+          ? "Runoff closed. The official story direction has been selected."
+          : "The runoff also ended in a tie. Another tie-resolution step is needed.",
 
         totalVotes,
 
-        winningChoice:
-          topChoices.length === 1
-            ? {
-                id: topChoices[0].id,
-                title: topChoices[0].title,
-                votes: topChoices[0].votes,
-              }
-            : null,
+        winningChoice: winningChoice
+          ? {
+              id: winningChoice.id,
+              title: winningChoice.title,
+              votes: winningChoice.votes,
+            }
+          : null,
 
-        tiedChoices:
-          topChoices.length > 1
-            ? topChoices.map((choice) => ({
-                id: choice.id,
-                title: choice.title,
-                votes: choice.votes,
-              }))
-            : [],
+        tiedChoices: tiedChoices.map((choice) => ({
+          id: choice.id,
+          title: choice.title,
+          votes: choice.votes,
+        })),
 
         story: publicStory(story),
       });
-
     } catch (error) {
-      console.error(
-        "Could not close runoff:",
-        error
-      );
+      console.error("Could not close runoff:", error);
 
       return res.status(500).json({
         success: false,
-        message: "Could not close runoff",
+        message: "Could not close runoff.",
       });
     }
   }
@@ -847,7 +991,7 @@ app.post(
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    message: "Route not found",
+    message: "Route not found.",
   });
 });
 
@@ -874,7 +1018,6 @@ async function startServer() {
         `TWISTED API running at http://localhost:${PORT}`
       );
     });
-
   } catch (error) {
     console.error(
       "Failed to start TWISTED:",

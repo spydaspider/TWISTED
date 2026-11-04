@@ -10,7 +10,10 @@ async function apiRequest(path, options = {}) {
     ...options,
     credentials: "include",
     headers: {
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      "X-Twisted-Admin-Action": "1",
+      ...(options.body
+        ? { "Content-Type": "application/json" }
+        : {}),
       ...options.headers,
     },
   });
@@ -18,12 +21,13 @@ async function apiRequest(path, options = {}) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.message || `Request failed (${response.status}).`);
+    throw new Error(
+      data.message || `Request failed (${response.status}).`
+    );
   }
 
   return data;
 }
-
 function getStoryFromResponse(data) {
   return data.draft || data.story || data.episode || data;
 }

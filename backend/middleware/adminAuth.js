@@ -1,7 +1,12 @@
+
 const crypto = require("crypto");
 
 const COOKIE_NAME = "twisted_admin_session";
 const SESSION_DURATION = 8 * 60 * 60 * 1000; // 8 hours
+
+// =====================================
+// Timing-safe comparison
+// =====================================
 
 function safeCompare(first, second) {
   if (
@@ -20,6 +25,38 @@ function safeCompare(first, second) {
   );
 }
 
+// =====================================
+// Admin request protection
+// =====================================
+
+// Check whether the request uses the Postman admin secret.
+function isAdminSecretRequest(req) {
+  const adminSecret = process.env.ADMIN_SECRET;
+  const providedSecret = req.get("x-admin-secret");
+
+  if (!adminSecret || !providedSecret) {
+    return false;
+  }
+
+  return safeCompare(providedSecret, adminSecret);
+}
+
+// Check for the special Admin Studio request header.
+function hasAdminActionHeader(req) {
+  return req.get("X-Twisted-Admin-Action") === "1";
+}
+
+// Identify requests that change data.
+function requiresAdminActionProtection(req) {
+  return ["POST", "PUT", "PATCH", "DELETE"].includes(
+    req.method
+  );
+}
+
+// =====================================
+// Session creation
+// =====================================
+
 function createSignature(payload, secret) {
   return crypto
     .createHmac("sha256", secret)
@@ -35,9 +72,12 @@ function createSession(secret) {
   return `${payload}.${signature}`;
 }
 
+// =====================================
+// Cookie handling
+// =====================================
+
 function getCookie(req, name) {
   const cookieHeader = req.headers.cookie || "";
-
   const cookies = cookieHeader.split(";");
 
   for (const cookie of cookies) {
@@ -49,12 +89,20 @@ function getCookie(req, name) {
     const value = cookie.slice(separator + 1).trim();
 
     if (key === name) {
-      return decodeURIComponent(value);
+      try {
+        return decodeURIComponent(value);
+      } catch {
+        return null;
+      }
     }
   }
 
   return null;
 }
+
+// =====================================
+// Session verification
+// =====================================
 
 function isValidSession(req) {
   const secret = process.env.ADMIN_SECRET;
@@ -70,7 +118,6 @@ function isValidSession(req) {
   if (parts.length !== 2) return false;
 
   const [payload, suppliedSignature] = parts;
-
   const expiresAt = Number(payload);
 
   if (
@@ -91,18 +138,17 @@ function isValidSession(req) {
   );
 }
 
+// =====================================
+// Admin authentication
+// =====================================
+
 function isAdmin(req) {
   const secret = process.env.ADMIN_SECRET;
 
   if (!secret) return false;
 
-  // Keep Postman and existing API testing compatible.
-  if (
-    safeCompare(
-      req.get("x-admin-secret"),
-      secret
-    )
-  ) {
+  // Postman/API testing authentication.
+  if (isAdminSecretRequest(req)) {
     return true;
   }
 
@@ -110,11 +156,15 @@ function isAdmin(req) {
   return isValidSession(req);
 }
 
+// =====================================
+// Admin authorization middleware
+// =====================================
+
 function requireAdmin(req, res, next) {
   if (!process.env.ADMIN_SECRET) {
     return res.status(503).json({
       success: false,
-      message: "ADMIN_SECRET is not configured",
+      message: "ADMIN_SECRET is not configured.",
     });
   }
 
@@ -125,8 +175,27 @@ function requireAdmin(req, res, next) {
     });
   }
 
+  // Browser-based state-changing requests must include
+  // the special protection header.
+  //
+  // Postman requests using x-admin-secret are exempt.
+  if (
+    requiresAdminActionProtection(req) &&
+    !isAdminSecretRequest(req) &&
+    !hasAdminActionHeader(req)
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: "Missing admin request protection header.",
+    });
+  }
+
   next();
 }
+
+// =====================================
+// Admin cookie creation
+// =====================================
 
 function setAdminCookie(res, secret) {
   const session = createSession(secret);
@@ -140,6 +209,10 @@ function setAdminCookie(res, secret) {
   });
 }
 
+// =====================================
+// Admin cookie removal
+// =====================================
+
 function clearAdminCookie(res) {
   res.clearCookie(COOKIE_NAME, {
     httpOnly: true,
@@ -149,6 +222,10 @@ function clearAdminCookie(res) {
   });
 }
 
+// =====================================
+// Verify admin secret
+// =====================================
+
 function verifyAdminSecret(suppliedSecret) {
   return safeCompare(
     suppliedSecret,
@@ -156,9 +233,16 @@ function verifyAdminSecret(suppliedSecret) {
   );
 }
 
+// =====================================
+// Exports
+// =====================================
+
 module.exports = {
   requireAdmin,
   isAdmin,
+  isAdminSecretRequest,
+  hasAdminActionHeader,
+  requiresAdminActionProtection,
   setAdminCookie,
   clearAdminCookie,
   verifyAdminSecret,
