@@ -1,3 +1,4 @@
+
 const mongoose = require("mongoose");
 
 const choiceSchema = new mongoose.Schema(
@@ -31,6 +32,32 @@ const storySchema = new mongoose.Schema(
     seriesSlug: {
       type: String,
       index: true,
+    },
+
+    // Total number of episodes planned for this series.
+    // Defaults to 8, but administrators can change it.
+    plannedEpisodes: {
+      type: Number,
+      default: 8,
+      min: 1,
+    },
+
+    // Identifies whether this episode is the series finale.
+    isFinale: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Indicates whether the entire series has ended.
+    seriesCompleted: {
+      type: Boolean,
+      default: false,
+    },
+
+    // Date and time the series was completed.
+    seriesCompletedAt: {
+      type: Date,
+      default: null,
     },
 
     // Links this episode to the previous episode.

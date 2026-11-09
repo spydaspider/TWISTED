@@ -325,15 +325,56 @@ router.post(
         });
       }
 
-      const seriesSlug =
-        previousStory.seriesSlug || previousStory.slug;
+     const seriesSlug =
+  previousStory.seriesSlug || previousStory.slug;
 
-      const nextEpisodeNumber =
-        Number(previousStory.episode || 1) + 1;
+// Retrieve the original episode, which controls
+// the planned length of the entire series.
+const seriesRoot = await Story.findOne({
+  slug: seriesSlug,
+});
 
-      const draftSlug =
-        `${seriesSlug}-episode-${nextEpisodeNumber}`;
+if (!seriesRoot) {
+  return res.status(409).json({
+    success: false,
+    message: "Original series record could not be found.",
+  });
+}
 
+const plannedEpisodes = Math.max(
+  1,
+  Number(seriesRoot.plannedEpisodes || 8)
+);
+
+const nextEpisodeNumber =
+  Number(previousStory.episode || 1) + 1;
+
+// Check whether the series has already finished.
+if (
+  seriesRoot.seriesCompleted ||
+  previousStory.seriesCompleted
+) {
+  return res.status(409).json({
+    success: false,
+    message: "This series has already been completed.",
+  });
+}
+
+// Never generate beyond the planned episode count.
+if (nextEpisodeNumber > plannedEpisodes) {
+  return res.status(409).json({
+    success: false,
+    message:
+      `This series has reached its planned limit of ${plannedEpisodes} episodes.`,
+  });
+}
+
+// Identify whether this is the final episode.
+const isFinale =
+  nextEpisodeNumber === plannedEpisodes;
+
+const draftSlug =
+  `${seriesSlug}-episode-${nextEpisodeNumber}`;
       // Prevent duplicate drafts for the same previous episode.
 
       const existingDraft = await Story.findOne({
@@ -546,6 +587,47 @@ episode.
 
 Let the story develop naturally over multiple episodes.
 
+==================================================
+7. SERIES ENDING RULES
+==================================================
+
+CURRENT EPISODE: ${nextEpisodeNumber}
+PLANNED SERIES LENGTH: ${plannedEpisodes}
+IS THIS THE FINALE: ${isFinale ? "YES" : "NO"}
+
+${isFinale ? `
+THIS IS THE FINAL EPISODE OF THE SERIES.
+
+You MUST bring the entire storyline to a satisfying
+and definitive conclusion.
+
+MANDATORY FINALE RULES:
+
+- Resolve the central mystery or main conflict.
+- Explain the important unanswered questions.
+- Deliver meaningful consequences for the characters.
+- Respect all previous community decisions.
+- Give the protagonist a meaningful conclusion.
+- Do not introduce a new major mystery.
+- Do not introduce a new villain or unrelated threat.
+- Do not end with an unresolved cliffhanger.
+- Do not suggest that another episode is coming.
+- Make the ending feel intentional and complete.
+
+The reader should finish this episode feeling that
+the story has reached its conclusion.
+
+You must still return exactly three short voting
+choices, but these must not introduce events that
+require another episode to explain.
+` : `
+This is NOT the final episode.
+
+Continue developing the main storyline.
+Do not resolve the entire central mystery yet.
+End with one logical cliffhanger that creates
+interest in the next episode.
+`}
 ==================================================
 7. CLIFFHANGER
 ==================================================
