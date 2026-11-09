@@ -1,45 +1,11 @@
+
 import { useEffect, useState } from "react";
 import "./App.css";
 import Admin from "./Admin";
+import ReaderAccount from "./ReaderAccount";
 
 const API_URL = "http://localhost:5000/api";
 const SERIES_SLUG = "the-message";
-
-function getVoterId() {
-  const storageKey = "twisted-voter-id";
-  let voterId = localStorage.getItem(storageKey);
-
-  if (!voterId) {
-    voterId =
-      typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-    localStorage.setItem(storageKey, voterId);
-  }
-
-  return voterId;
-}
-
-function getSavedVote(slug) {
-  try {
-    const saved = localStorage.getItem(`twisted-voted-${slug}`);
-
-    if (!saved) return null;
-    if (saved === "true") return { round: "original" };
-
-    return JSON.parse(saved);
-  } catch {
-    return null;
-  }
-}
-
-function saveVote(slug, round) {
-  localStorage.setItem(
-    `twisted-voted-${slug}`,
-    JSON.stringify({ round })
-  );
-}
 
 function getChoiceLetter(index) {
   return String.fromCharCode(65 + index);
@@ -87,6 +53,11 @@ function PublicApp() {
   const [hasVoted, setHasVoted] = useState(false);
   const [votedRound, setVotedRound] = useState(null);
 
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [voteHistoryLoading, setVoteHistoryLoading] = useState(false);
+
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [listError, setListError] = useState("");
@@ -133,12 +104,22 @@ function PublicApp() {
   const alreadyVotedThisRound =
     hasVoted && votedRound === activeRound;
 
-  const canVote =
+  // Readers may select a choice before signing in.
+  // They must authenticate before submitting the vote.
+  const canSelectChoice =
+    authChecked &&
     !loading &&
     !submitting &&
+    !voteHistoryLoading &&
     !votingClosed &&
     !alreadyVotedThisRound &&
     activeChoices.length > 0;
+
+  const canVote =
+    Boolean(user) &&
+    canSelectChoice;
+
+  const readerId = user?._id || user?.id || "";
 
   const currentEpisodeIndex = stories.findIndex(
     (episode) => episode.slug === selectedSlug
@@ -175,6 +156,115 @@ function PublicApp() {
     : [];
 
   const readingTime = getReadingTime(story?.content || "");
+
+  // Check whether the reader already has an authenticated session.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkReaderSession() {
+      try {
+        const response = await fetch(`${API_URL}/auth/me`, {
+          method: "GET",
+          credentials: "include",
+        });
+
+        const data = await response.json();
+
+        if (cancelled) return;
+
+        if (response.ok && data.user) {
+          setUser(data.user);
+        } else {
+          setUser(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setUser(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setAuthChecked(true);
+        }
+      }
+    }
+
+    checkReaderSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load the reader's voting history for the selected episode.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadReaderVoteStatus() {
+      if (!readerId || !selectedSlug) {
+        setHasVoted(false);
+        setVotedRound(null);
+        setVoteHistoryLoading(false);
+        return;
+      }
+
+      try {
+        setVoteHistoryLoading(true);
+
+        const response = await fetch(
+          `${API_URL}/auth/voting-history`,
+          {
+            method: "GET",
+            credentials: "include",
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.message || "Could not load your voting history."
+          );
+        }
+
+        if (cancelled) return;
+
+        const history = Array.isArray(data.history)
+          ? data.history
+          : [];
+
+        const episodeVotes = history.filter(
+          (item) => item.story?.slug === selectedSlug
+        );
+
+        // Prefer the vote in the currently active round.
+        // If only an original vote exists during a runoff,
+        // the reader should still be allowed to vote in the runoff.
+        const matchingVote =
+          episodeVotes.find((item) => item.round === activeRound) ||
+          episodeVotes[0];
+
+        setHasVoted(Boolean(matchingVote));
+        setVotedRound(matchingVote?.round || null);
+      } catch {
+        if (!cancelled) {
+          setHasVoted(false);
+          setVotedRound(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setVoteHistoryLoading(false);
+        }
+      }
+    }
+
+    if (authChecked) {
+      loadReaderVoteStatus();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [readerId, selectedSlug, activeRound, authChecked]);
 
   // Load all published episodes.
   useEffect(() => {
@@ -316,11 +406,6 @@ function PublicApp() {
         if (cancelled) return;
 
         setStory(data.story);
-
-        const savedVote = getSavedVote(selectedSlug);
-
-        setHasVoted(Boolean(savedVote));
-        setVotedRound(savedVote?.round || null);
       } catch (err) {
         if (!cancelled) {
           setError(
@@ -409,6 +494,11 @@ function PublicApp() {
   }
 
   async function handleVote() {
+    if (!user) {
+      setAuthOpen(true);
+      return;
+    }
+
     if (!selected || !canVote || !story) return;
 
     try {
@@ -416,18 +506,17 @@ function PublicApp() {
       setError("");
       setNotice("");
 
-      const voterId = getVoterId();
-
       const response = await fetch(
         `${API_URL}/stories/${selectedSlug}/vote`,
         {
           method: "POST",
+          credentials: "include",
           headers: {
             "Content-Type": "application/json",
           },
+          // The backend identifies the voter from the session cookie.
           body: JSON.stringify({
             choiceId: selected,
-            voterId,
           }),
         }
       );
@@ -435,10 +524,15 @@ function PublicApp() {
       const data = await response.json();
 
       if (!response.ok) {
+        if (response.status === 401) {
+          setUser(null);
+          setAuthOpen(true);
+          throw new Error("Please log in to vote.");
+        }
+
         if (response.status === 409) {
           setHasVoted(true);
           setVotedRound(activeRound);
-          saveVote(selectedSlug, activeRound);
         }
 
         throw new Error(
@@ -455,7 +549,6 @@ function PublicApp() {
       const recordedRound = data.round || activeRound;
 
       setVotedRound(recordedRound);
-      saveVote(selectedSlug, recordedRound);
 
       setNotice(
         recordedRound === "runoff"
@@ -490,9 +583,19 @@ function PublicApp() {
           <a href="#how-it-works">How It Works</a>
         </div>
 
-        <a className="nav-button" href="#story">
-          Enter the story <span>↗</span>
-        </a>
+        <div className="nav-account-actions">
+          <a className="nav-button" href="#story">
+            Enter the story <span>↗</span>
+          </a>
+
+          <ReaderAccount
+            user={user}
+            onUserChange={setUser}
+            isOpen={authOpen}
+            onOpen={() => setAuthOpen(true)}
+            onClose={() => setAuthOpen(false)}
+          />
+        </div>
       </nav>
 
       <section className="hero" id="home">
@@ -824,13 +927,13 @@ function PublicApp() {
                           selected === choice.id ? "selected" : ""
                         } ${isWinner ? "winning-choice" : ""}`}
                         onClick={() => {
-                          if (!canVote) return;
+                          if (!canSelectChoice) return;
 
                           setSelected(choice.id);
                           setNotice("");
                           setError("");
                         }}
-                        disabled={!canVote}
+                        disabled={!canSelectChoice}
                         aria-pressed={selected === choice.id}
                       >
                         <span className="choice-letter">
@@ -868,7 +971,39 @@ function PublicApp() {
                   })}
                 </div>
 
-                {canVote ? (
+                {alreadyVotedThisRound ? (
+                  <p className="notice">
+                    You've already voted in this round using your account.
+                  </p>
+                ) : votingClosed ? (
+                  <p className="notice">
+                    Voting is closed. The result is shown above.
+                  </p>
+                ) : !authChecked ? (
+                  <p className="notice">
+                    Checking your reader account...
+                  </p>
+                ) : !user ? (
+                  <>
+                    <button
+                      type="button"
+                      className="primary-button vote-button"
+                      disabled={!selected}
+                      onClick={() => setAuthOpen(true)}
+                    >
+                      Log in to vote →
+                    </button>
+
+                    <p className="notice">
+                      Choose an option, then log in or create an account
+                      to submit your vote.
+                    </p>
+                  </>
+                ) : voteHistoryLoading ? (
+                  <p className="notice">
+                    Checking your voting history...
+                  </p>
+                ) : canVote ? (
                   <button
                     type="button"
                     className="primary-button vote-button"
@@ -881,19 +1016,11 @@ function PublicApp() {
                         ? "Cast your runoff vote →"
                         : "Cast your vote →"}
                   </button>
-                ) : alreadyVotedThisRound ? (
-                  <p className="notice">
-                    You've already voted in this round in this browser.
-                  </p>
-                ) : votingClosed ? (
-                  <p className="notice">
-                    Voting is closed. The result is shown above.
-                  </p>
-                ) : (
+                ) : activeChoices.length === 0 ? (
                   <p className="notice">
                     There are currently no choices available for this voting round.
                   </p>
-                )}
+                ) : null}
 
                 {notice && (
                   <p className="notice success-notice" role="status">

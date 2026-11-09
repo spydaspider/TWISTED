@@ -1498,6 +1498,20 @@ p.notice[role="status"],
   }
 }
 
+.nav-account-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 700px) {
+  .nav-account-actions {
+    gap: 6px;
+  }
+}
+
 /* REDUCED MOTION */
 
 @media (prefers-reduced-motion: reduce) {
