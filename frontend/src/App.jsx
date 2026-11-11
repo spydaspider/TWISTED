@@ -1,11 +1,10 @@
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import Admin from "./Admin";
 import ReaderAccount from "./ReaderAccount";
 
 const API_URL = "http://localhost:5000/api";
-const SERIES_SLUG = "the-message";
 
 function getChoiceLetter(index) {
   return String.fromCharCode(65 + index);
@@ -15,6 +14,10 @@ function sortEpisodes(episodes) {
   return [...episodes].sort(
     (a, b) => Number(a.episode || 0) - Number(b.episode || 0)
   );
+}
+
+function getSeriesSlug(episode) {
+  return episode.seriesSlug || episode.slug;
 }
 
 function getReadingTime(content = "") {
@@ -43,7 +46,13 @@ function getEpisodeStatus(story) {
 }
 
 function PublicApp() {
-  const [stories, setStories] = useState([]);
+  // All published episodes from every series.
+  const [allStories, setAllStories] = useState([]);
+
+  // The series currently being read.
+  const [selectedSeriesSlug, setSelectedSeriesSlug] = useState("");
+
+  // Episodes belonging only to the selected series.
   const [selectedSlug, setSelectedSlug] = useState("");
   const [story, setStory] = useState(null);
 
@@ -61,6 +70,46 @@ function PublicApp() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [listError, setListError] = useState("");
+
+  // Build a list of series from all published episodes.
+  const seriesList = useMemo(() => {
+    const grouped = new Map();
+
+    allStories.forEach((episode) => {
+      const seriesSlug = getSeriesSlug(episode);
+
+      if (!seriesSlug) return;
+
+      if (!grouped.has(seriesSlug)) {
+        grouped.set(seriesSlug, []);
+      }
+
+      grouped.get(seriesSlug).push(episode);
+    });
+
+    return Array.from(grouped.entries())
+      .map(([slug, episodes]) => {
+        const sortedEpisodes = sortEpisodes(episodes);
+        const firstEpisode = sortedEpisodes[0];
+
+        return {
+          slug,
+          episodes: sortedEpisodes,
+          title: firstEpisode?.title || slug,
+          genre: firstEpisode?.genre || "Story",
+          description: firstEpisode?.description || "",
+          episodeCount: sortedEpisodes.length,
+        };
+      })
+      .sort((a, b) => a.title.localeCompare(b.title));
+  }, [allStories]);
+
+  const selectedSeries = seriesList.find(
+    (series) => series.slug === selectedSeriesSlug
+  );
+
+  // Only show episodes from the selected series in the episode selector.
+  const stories = selectedSeries?.episodes || [];
 
   const runoffActive = story?.runoffStatus === "voting";
   const activeRound = runoffActive ? "runoff" : "original";
@@ -115,9 +164,7 @@ function PublicApp() {
     !alreadyVotedThisRound &&
     activeChoices.length > 0;
 
-  const canVote =
-    Boolean(user) &&
-    canSelectChoice;
+  const canVote = Boolean(user) && canSelectChoice;
 
   const readerId = user?._id || user?.id || "";
 
@@ -142,7 +189,7 @@ function PublicApp() {
   const totalEpisodes = stories.length;
 
   const episodeProgress =
-    totalEpisodes > 0
+    totalEpisodes > 0 && currentEpisodeIndex >= 0
       ? ((currentEpisodeIndex + 1) / totalEpisodes) * 100
       : 0;
 
@@ -195,6 +242,123 @@ function PublicApp() {
     };
   }, []);
 
+  // Load all published stories and episodes from every series.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPublishedStories() {
+      try {
+        const response = await fetch(`${API_URL}/stories`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.message || "Could not load published stories."
+          );
+        }
+
+        const episodeList = Array.isArray(data.stories)
+          ? data.stories
+          : Array.isArray(data)
+            ? data
+            : [];
+
+        const publishedEpisodes = episodeList.filter(
+          (episode) =>
+            episode.status !== "draft" &&
+            episode.slug
+        );
+
+        if (cancelled) return;
+
+        const uniqueEpisodes = Array.from(
+          new Map(
+            publishedEpisodes.map((episode) => [
+              episode.slug,
+              episode,
+            ])
+          ).values()
+        );
+
+        setAllStories(uniqueEpisodes);
+        setListError("");
+
+        if (uniqueEpisodes.length === 0) {
+          setListError(
+            "No published stories are available yet."
+          );
+          setSelectedSeriesSlug("");
+          setSelectedSlug("");
+          return;
+        }
+
+        // Keep the reader on their current series if it still exists.
+        // Otherwise, select the first available series.
+        const availableSeriesSlugs = new Set(
+          uniqueEpisodes.map(getSeriesSlug)
+        );
+
+        setSelectedSeriesSlug((currentSlug) => {
+          if (
+            currentSlug &&
+            availableSeriesSlugs.has(currentSlug)
+          ) {
+            return currentSlug;
+          }
+
+          const firstEpisode = uniqueEpisodes[0];
+
+          return getSeriesSlug(firstEpisode);
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setListError(
+            err.message || "Could not load the published stories."
+          );
+        }
+      }
+    }
+
+    loadPublishedStories();
+
+    // Check for newly published stories every 15 seconds.
+    const intervalId = window.setInterval(
+      loadPublishedStories,
+      15000
+    );
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  // When the reader selects a different series,
+  // open its latest available episode.
+  useEffect(() => {
+    if (!selectedSeriesSlug) return;
+
+    const seriesEpisodes = sortEpisodes(
+      allStories.filter(
+        (episode) => getSeriesSlug(episode) === selectedSeriesSlug
+      )
+    );
+
+    if (seriesEpisodes.length === 0) return;
+
+    setSelectedSlug((currentSlug) => {
+      const currentEpisodeExists = seriesEpisodes.some(
+        (episode) => episode.slug === currentSlug
+      );
+
+      if (currentEpisodeExists) {
+        return currentSlug;
+      }
+
+      return seriesEpisodes[seriesEpisodes.length - 1].slug;
+    });
+  }, [selectedSeriesSlug, allStories]);
+
   // Load the reader's voting history for the selected episode.
   useEffect(() => {
     let cancelled = false;
@@ -237,8 +401,7 @@ function PublicApp() {
         );
 
         // Prefer the vote in the currently active round.
-        // If only an original vote exists during a runoff,
-        // the reader should still be allowed to vote in the runoff.
+        // An original vote does not prevent a runoff vote.
         const matchingVote =
           episodeVotes.find((item) => item.round === activeRound) ||
           episodeVotes[0];
@@ -266,117 +429,13 @@ function PublicApp() {
     };
   }, [readerId, selectedSlug, activeRound, authChecked]);
 
-  // Load all published episodes.
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadEpisodes() {
-      try {
-        const response = await fetch(`${API_URL}/stories`);
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            data.message || "Could not load published episodes."
-          );
-        }
-
-        const episodeList = Array.isArray(data.stories)
-          ? data.stories
-          : Array.isArray(data)
-            ? data
-            : [];
-
-        let publishedEpisodes = episodeList.filter(
-          (episode) =>
-            episode.status !== "draft" &&
-            (
-              episode.seriesSlug === SERIES_SLUG ||
-              episode.slug === SERIES_SLUG ||
-              episode.previousEpisodeSlug === SERIES_SLUG
-            )
-        );
-
-        const episodeOneExists = publishedEpisodes.some(
-          (episode) => episode.slug === SERIES_SLUG
-        );
-
-        if (!episodeOneExists) {
-          try {
-            const firstEpisodeResponse = await fetch(
-              `${API_URL}/stories/${SERIES_SLUG}`
-            );
-
-            const firstEpisodeData =
-              await firstEpisodeResponse.json();
-
-            if (
-              firstEpisodeResponse.ok &&
-              firstEpisodeData.story &&
-              firstEpisodeData.story.status !== "draft"
-            ) {
-              publishedEpisodes.push(firstEpisodeData.story);
-            }
-          } catch {
-            // Continue with the episodes already retrieved.
-          }
-        }
-
-        if (cancelled) return;
-
-        const uniqueEpisodes = Array.from(
-          new Map(
-            publishedEpisodes.map((episode) => [
-              episode.slug,
-              episode,
-            ])
-          ).values()
-        );
-
-        const sortedEpisodes = sortEpisodes(uniqueEpisodes);
-
-        setStories(sortedEpisodes);
-        setListError("");
-
-        if (sortedEpisodes.length === 0) {
-          setListError("No published episodes are available yet.");
-          return;
-        }
-
-        setSelectedSlug((currentSlug) => {
-          if (
-            currentSlug &&
-            sortedEpisodes.some(
-              (episode) => episode.slug === currentSlug
-            )
-          ) {
-            return currentSlug;
-          }
-
-          return sortedEpisodes[sortedEpisodes.length - 1].slug;
-        });
-      } catch (err) {
-        if (!cancelled) {
-          setListError(
-            err.message || "Could not load the episode list."
-          );
-        }
-      }
-    }
-
-    loadEpisodes();
-
-    const intervalId = window.setInterval(loadEpisodes, 15000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
   // Load the selected episode.
   useEffect(() => {
-    if (!selectedSlug) return;
+    if (!selectedSlug) {
+      setStory(null);
+      setLoading(false);
+      return;
+    }
 
     let cancelled = false;
 
@@ -493,6 +552,26 @@ function PublicApp() {
     });
   }
 
+  function changeSeries(event) {
+    const newSeriesSlug = event.target.value;
+
+    if (!newSeriesSlug) return;
+
+    setSelectedSeriesSlug(newSeriesSlug);
+    setSelected("");
+    setNotice("");
+    setError("");
+
+    document.getElementById("story")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
+  function handleEpisodeChange(event) {
+    changeEpisode(event.target.value);
+  }
+
   async function handleVote() {
     if (!user) {
       setAuthOpen(true);
@@ -514,7 +593,6 @@ function PublicApp() {
           headers: {
             "Content-Type": "application/json",
           },
-          // The backend identifies the voter from the session cookie.
           body: JSON.stringify({
             choiceId: selected,
           }),
@@ -567,10 +645,6 @@ function PublicApp() {
     }
   }
 
-  function handleEpisodeChange(event) {
-    changeEpisode(event.target.value);
-  }
-
   return (
     <main>
       <nav className="navbar">
@@ -579,13 +653,13 @@ function PublicApp() {
         </a>
 
         <div className="nav-links">
-          <a href="#story">The Story</a>
+          <a href="#story">Stories</a>
           <a href="#how-it-works">How It Works</a>
         </div>
 
         <div className="nav-account-actions">
           <a className="nav-button" href="#story">
-            Enter the story <span>↗</span>
+            Explore stories <span>↗</span>
           </a>
 
           <ReaderAccount
@@ -611,13 +685,13 @@ function PublicApp() {
           </h1>
 
           <p className="hero-description">
-            Every decision changes what happens next. Read the
-            story, make your choice and discover what the community
-            decides.
+            Every decision changes what happens next. Explore
+            different stories, make your choice and discover what
+            the community decides.
           </p>
 
           <a className="primary-button" href="#story">
-            Enter the story <span>↓</span>
+            Explore stories <span>↓</span>
           </a>
 
           <p className="hero-note">
@@ -634,9 +708,9 @@ function PublicApp() {
           </div>
 
           <div className="art-label">
-            <span>CASE FILE 001</span>
-            <strong>THE MESSAGE</strong>
-            <span>11:47 PM · UNKNOWN SENDER</span>
+            <span>TWISTED UNIVERSE</span>
+            <strong>YOUR NEXT STORY</strong>
+            <span>EVERY CHOICE HAS CONSEQUENCES</span>
           </div>
         </div>
       </section>
@@ -645,19 +719,44 @@ function PublicApp() {
         <div className="story-heading">
           <div>
             <p className="eyebrow">ENTER THE TWISTED UNIVERSE</p>
-            <h2>THE MESSAGE</h2>
+            <h2>
+              {selectedSeries?.title || "EXPLORE STORIES"}
+            </h2>
             <p className="story-heading-description">
-              One story. Every episode shaped by the community.
+              Choose a story, follow its episodes and help decide
+              what happens next.
             </p>
           </div>
 
           <div className="series-tag">
             <span className="status-dot" />
-            INTERACTIVE SERIES
+            {seriesList.length}{" "}
+            {seriesList.length === 1 ? "STORY" : "STORIES"} AVAILABLE
           </div>
         </div>
 
         <div className="episode-toolbar">
+          <div className="episode-navigation">
+            <label htmlFor="series-select">
+              SELECT A STORY
+            </label>
+
+            <select
+              id="series-select"
+              className="episode-selector"
+              value={selectedSeriesSlug}
+              onChange={changeSeries}
+              disabled={seriesList.length === 0}
+            >
+              {seriesList.map((series) => (
+                <option key={series.slug} value={series.slug}>
+                  {series.title} ({series.episodeCount}{" "}
+                  {series.episodeCount === 1 ? "episode" : "episodes"})
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="episode-navigation">
             <label htmlFor="episode-select">
               SELECT AN EPISODE
@@ -687,6 +786,12 @@ function PublicApp() {
           )}
         </div>
 
+        {listError && (
+          <p className="notice" role="alert">
+            {listError}
+          </p>
+        )}
+
         {story && totalEpisodes > 0 && currentEpisodeIndex >= 0 && (
           <div className="episode-progress">
             <div className="episode-progress-labels">
@@ -710,12 +815,6 @@ function PublicApp() {
               />
             </div>
           </div>
-        )}
-
-        {listError && (
-          <p className="notice" role="alert">
-            {listError}
-          </p>
         )}
 
         <div className="story-layout">
@@ -792,7 +891,8 @@ function PublicApp() {
                     className="episode-nav-button next"
                     disabled={!nextEpisode}
                     onClick={() =>
-                      nextEpisode && changeEpisode(nextEpisode.slug)
+                      nextEpisode &&
+                      changeEpisode(nextEpisode.slug)
                     }
                   >
                     <span>NEXT EPISODE →</span>
@@ -805,7 +905,11 @@ function PublicApp() {
                 </div>
               </>
             ) : (
-              <p>This episode could not be loaded.</p>
+              <p>
+                {listError
+                  ? "Stories could not be loaded. Please try again."
+                  : "Select a story to begin reading."}
+              </p>
             )}
           </article>
 

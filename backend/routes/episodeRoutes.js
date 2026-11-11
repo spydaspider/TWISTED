@@ -572,20 +572,37 @@ Write like a gripping scene from a thriller series.
 6. STORY DEVELOPMENT
 ==================================================
 
-Each episode should:
+Every episode should:
 
 1. Continue the previous episode's situation.
 2. Show the consequence of the winning choice.
-3. Reveal one important clue, truth or development.
-4. Increase tension or emotional stakes.
-5. End with a compelling cliffhanger.
+3. Develop the main storyline.
+4. Increase tension or emotional stakes where appropriate.
+5. Follow the series-ending rules below.
 
-Do not resolve the entire central mystery too early.
+${isFinale ? `
+FINALE DEVELOPMENT:
 
-Do not force several major revelations into one short
-episode.
+This is the final episode.
 
-Let the story develop naturally over multiple episodes.
+Resolve the central mystery or main conflict.
+Explain the important unanswered questions.
+Show the consequences of the characters' decisions.
+Give the story a satisfying and definitive ending.
+
+Do not create another major mystery.
+Do not introduce a new unresolved threat.
+Do not end with an unresolved cliffhanger.
+` : `
+ONGOING SERIES DEVELOPMENT:
+
+This is not the final episode.
+
+Do not resolve the entire central mystery yet.
+Develop the storyline naturally.
+End with one compelling cliffhanger that leads
+logically into the next episode.
+`}
 
 ==================================================
 7. SERIES ENDING RULES
@@ -893,11 +910,19 @@ Return valid JSON only.
 
         title: generated.title.trim(),
 
-        genre: previousStory.genre,
+       genre: previousStory.genre,
 
-        episode: nextEpisodeNumber,
+episode: nextEpisodeNumber,
 
-        status: "draft",
+plannedEpisodes,
+
+isFinale,
+
+seriesCompleted: false,
+
+seriesCompletedAt: null,
+
+status: "draft",
 
         description: generated.description.trim(),
 

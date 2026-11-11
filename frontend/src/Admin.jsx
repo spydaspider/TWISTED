@@ -1,9 +1,24 @@
-import { useCallback, useEffect, useState } from "react";
+
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import "./Admin.css";
 
 const API_URL = "http://localhost:5000/api";
 const MIN_EPISODE_WORDS = 100;
 const MAX_EPISODE_WORDS = 180;
+
+const emptyNewStory = {
+  title: "",
+  genre: "Psychological Thriller",
+  description: "",
+  content: "",
+  plannedEpisodes: 8,
+  choices: ["", "", ""],
+};
 
 async function apiRequest(path, options = {}) {
   const response = await fetch(`${API_URL}${path}`, {
@@ -11,9 +26,7 @@ async function apiRequest(path, options = {}) {
     credentials: "include",
     headers: {
       "X-Twisted-Admin-Action": "1",
-      ...(options.body
-        ? { "Content-Type": "application/json" }
-        : {}),
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...options.headers,
     },
   });
@@ -28,6 +41,7 @@ async function apiRequest(path, options = {}) {
 
   return data;
 }
+
 function getStoryFromResponse(data) {
   return data.draft || data.story || data.episode || data;
 }
@@ -72,31 +86,17 @@ function getVotePercentage(votes, total) {
 
 function getStatusLabel(story) {
   if (!story) return "Unknown";
-
   if (story.status === "draft") return "Draft";
-
-  if (story.runoffStatus === "voting") {
-    return "Runoff live";
-  }
-
-  if (story.status === "completed") {
-    return "Completed";
-  }
-
-  if (story.status === "voting") {
-    return "Live voting";
-  }
-
+  if (story.runoffStatus === "voting") return "Runoff live";
+  if (story.status === "completed") return "Completed";
+  if (story.status === "voting") return "Live voting";
   return story.status || "Unknown";
 }
 
 function getStatusClass(story) {
   if (!story) return "unknown";
-
   if (story.status === "draft") return "draft";
-
   if (story.runoffStatus === "voting") return "runoff";
-
   return story.status || "unknown";
 }
 
@@ -162,7 +162,9 @@ function VoteResults({ title, choices = [], winnerId }) {
       </div>
 
       {choices.length === 0 ? (
-        <p className="admin-muted">No voting choices are available.</p>
+        <p className="admin-muted">
+          No voting choices are available.
+        </p>
       ) : (
         <div className="admin-vote-list">
           {choices.map((choice) => {
@@ -176,9 +178,12 @@ function VoteResults({ title, choices = [], winnerId }) {
                   <span>
                     {choice.title}
                     {isWinner && (
-                      <span className="admin-winner-inline"> · WINNER</span>
+                      <span className="admin-winner-inline">
+                        {" "}· WINNER
+                      </span>
                     )}
                   </span>
+
                   <strong>
                     {votes} <small>({percentage}%)</small>
                   </strong>
@@ -215,18 +220,67 @@ export default function Admin() {
   const [draftSlug, setDraftSlug] = useState("");
   const [draftSaving, setDraftSaving] = useState(false);
 
+  // NEW STORY FORM STATE
+  const [showNewStory, setShowNewStory] = useState(false);
+  const [newStory, setNewStory] = useState(emptyNewStory);
+  const [creatingStory, setCreatingStory] = useState(false);
+
   const selectedStory = stories.find(
     (story) => story.slug === selectedSlug
   );
 
+  // GROUP EPISODES BY SERIES
+  const groupedStories = useMemo(() => {
+    const groups = new Map();
+
+    stories.forEach((story) => {
+      const seriesKey = story.seriesSlug || story.slug;
+
+      if (!groups.has(seriesKey)) {
+        groups.set(seriesKey, []);
+      }
+
+      groups.get(seriesKey).push(story);
+    });
+
+    return Array.from(groups.entries()).map(
+      ([seriesKey, episodes]) => {
+        const sortedEpisodes = [...episodes].sort(
+          (a, b) =>
+            Number(a.episode || 0) - Number(b.episode || 0)
+        );
+
+        const firstEpisode =
+          sortedEpisodes.find(
+            (episode) => Number(episode.episode) === 1
+          ) || sortedEpisodes[0];
+
+        return {
+          seriesKey,
+          title: firstEpisode?.title || seriesKey,
+          genre: firstEpisode?.genre || "Uncategorised",
+          episodes: sortedEpisodes,
+        };
+      }
+    );
+  }, [stories]);
+
+  // FIND THE SERIES BELONGING TO THE SELECTED EPISODE
+  const selectedSeriesKey = selectedStory
+    ? selectedStory.seriesSlug || selectedStory.slug
+    : "";
+
+  const selectedSeries = groupedStories.find(
+    (series) => series.seriesKey === selectedSeriesKey
+  );
+
+  const selectedSeriesEpisodes = selectedSeries?.episodes || [];
+
   const draftWordCount = getWordCount(draft?.content || "");
   const draftValidationErrors = getDraftValidation(draft);
 
-  const loadStories = useCallback(async () => {
-    const data = await apiRequest("/admin/stories");
-    const list = Array.isArray(data.stories) ? data.stories : [];
-
-    list.sort((a, b) => {
+  const sortStories = (list) => {
+    return [...list].sort((a, b) => {
       const seriesA = a.seriesSlug || a.slug;
       const seriesB = b.seriesSlug || b.slug;
 
@@ -236,6 +290,13 @@ export default function Admin() {
 
       return Number(a.episode || 0) - Number(b.episode || 0);
     });
+  };
+
+  const loadStories = useCallback(async () => {
+    const data = await apiRequest("/admin/stories");
+    const list = sortStories(
+      Array.isArray(data.stories) ? data.stories : []
+    );
 
     setStories(list);
 
@@ -282,20 +343,12 @@ export default function Admin() {
     async function refresh() {
       try {
         const data = await apiRequest("/admin/stories");
+
         if (!active) return;
 
-        const list = Array.isArray(data.stories) ? data.stories : [];
-
-        list.sort((a, b) => {
-          const seriesA = a.seriesSlug || a.slug;
-          const seriesB = b.seriesSlug || b.slug;
-
-          if (seriesA !== seriesB) {
-            return seriesA.localeCompare(seriesB);
-          }
-
-          return Number(a.episode || 0) - Number(b.episode || 0);
-        });
+        const list = sortStories(
+          Array.isArray(data.stories) ? data.stories : []
+        );
 
         setStories(list);
 
@@ -320,6 +373,30 @@ export default function Admin() {
       window.clearInterval(intervalId);
     };
   }, [authenticated]);
+
+  // SELECT A DIFFERENT SERIES
+  function handleSeriesChange(seriesKey) {
+    const series = groupedStories.find(
+      (item) => item.seriesKey === seriesKey
+    );
+
+    if (!series || !series.episodes.length) return;
+
+    setSelectedSlug(series.episodes[0].slug);
+    setDraft(null);
+    setDraftSlug("");
+    setError("");
+    setNotice("");
+  }
+
+  // SELECT A DIFFERENT EPISODE
+  function handleEpisodeChange(slug) {
+    setSelectedSlug(slug);
+    setDraft(null);
+    setDraftSlug("");
+    setError("");
+    setNotice("");
+  }
 
   async function handleLogin(event) {
     event.preventDefault();
@@ -377,6 +454,115 @@ export default function Admin() {
     }
   }
 
+  // CREATE NEW STORY
+
+  function updateNewStory(field, value) {
+    setNewStory((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  function updateNewStoryChoice(index, value) {
+    setNewStory((current) => {
+      const choices = [...current.choices];
+      choices[index] = value;
+
+      return {
+        ...current,
+        choices,
+      };
+    });
+  }
+
+  async function handleCreateStory(event) {
+    event.preventDefault();
+
+    setError("");
+    setNotice("");
+
+    const {
+      title,
+      genre,
+      description,
+      content,
+      plannedEpisodes,
+      choices,
+    } = newStory;
+
+    if (
+      !title.trim() ||
+      !genre.trim() ||
+      !description.trim() ||
+      !content.trim()
+    ) {
+      setError(
+        "Please complete all story details and opening episode content."
+      );
+      return;
+    }
+
+    if (
+      !Number.isInteger(Number(plannedEpisodes)) ||
+      Number(plannedEpisodes) < 1 ||
+      Number(plannedEpisodes) > 50
+    ) {
+      setError("Planned episodes must be between 1 and 50.");
+      return;
+    }
+
+    if (
+      choices.length !== 3 ||
+      choices.some((choice) => !choice.trim())
+    ) {
+      setError("Please provide exactly three voting choices.");
+      return;
+    }
+
+    setCreatingStory(true);
+
+    try {
+      const data = await apiRequest("/admin/stories", {
+        method: "POST",
+        body: JSON.stringify({
+          title: title.trim(),
+          genre: genre.trim(),
+          description: description.trim(),
+          content: content.trim(),
+          plannedEpisodes: Number(plannedEpisodes),
+          choices: choices.map((choice) => ({
+            title: choice.trim(),
+          })),
+        }),
+      });
+
+      if (!data.story?.slug) {
+        throw new Error("The server did not return the new story.");
+      }
+
+      const createdSlug = data.story.slug;
+
+      setNewStory(emptyNewStory);
+      setShowNewStory(false);
+      setDraft(null);
+      setDraftSlug("");
+
+      await loadStories();
+
+      // Select the newly created story.
+      setSelectedSlug(createdSlug);
+
+      setNotice(
+        data.message ||
+          "New story created successfully. Voting is now open."
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCreatingStory(false);
+    }
+  }
+
   async function generateEpisode() {
     if (!selectedStory) return;
 
@@ -388,7 +574,9 @@ export default function Admin() {
 
     try {
       const data = await apiRequest(
-        `/admin/stories/${encodeURIComponent(selectedStory.slug)}/episodes/draft`,
+        `/admin/stories/${encodeURIComponent(
+          selectedStory.slug
+        )}/episodes/draft`,
         { method: "POST" }
       );
 
@@ -396,7 +584,7 @@ export default function Admin() {
 
       if (!generated || !generated.slug) {
         throw new Error(
-          "The server generated a response, but no draft episode slug was returned. Check the backend response in Postman."
+          "The server generated a response, but no draft episode slug was returned."
         );
       }
 
@@ -480,7 +668,7 @@ export default function Admin() {
 
       const savedDraft = getStoryFromResponse(data);
 
-      if (savedDraft && savedDraft.slug) {
+      if (savedDraft?.slug) {
         setDraft(savedDraft);
       }
 
@@ -517,7 +705,6 @@ export default function Admin() {
     setNotice("");
 
     try {
-      // Save the latest editor contents before publishing.
       await apiRequest(
         `/admin/episodes/${encodeURIComponent(draftSlug)}`,
         {
@@ -561,11 +748,13 @@ export default function Admin() {
         <form className="admin-login-card" onSubmit={handleLogin}>
           <p className="admin-eyebrow">RESTRICTED ACCESS</p>
           <h1>Admin Studio</h1>
+
           <p className="admin-muted">
             Sign in to manage stories, voting and episode publication.
           </p>
 
           <label htmlFor="admin-secret">Admin secret</label>
+
           <input
             id="admin-secret"
             type="password"
@@ -577,7 +766,9 @@ export default function Admin() {
           />
 
           {loginError && (
-            <p className="admin-alert admin-alert-error">{loginError}</p>
+            <p className="admin-alert admin-alert-error">
+              {loginError}
+            </p>
           )}
 
           <button className="admin-primary" disabled={busy}>
@@ -593,13 +784,16 @@ export default function Admin() {
   }
 
   const totalEpisodes = stories.length;
+
   const liveEpisodes = stories.filter(
     (story) =>
       story.status === "voting" || story.runoffStatus === "voting"
   ).length;
+
   const completedEpisodes = stories.filter(
     (story) => story.status === "completed"
   ).length;
+
   const draftEpisodes = stories.filter(
     (story) => story.status === "draft"
   ).length;
@@ -624,6 +818,11 @@ export default function Admin() {
     selectedStory?.runoffStatus !== "voting" &&
     Boolean(officialWinner);
 
+  const seriesIsCompleted =
+    selectedStory?.seriesCompleted ||
+    Number(selectedStory?.episode || 1) >=
+      Number(selectedStory?.plannedEpisodes || 8);
+
   return (
     <main className="admin-page">
       <header className="admin-header">
@@ -640,7 +839,7 @@ export default function Admin() {
           <button
             className="admin-logout"
             onClick={handleLogout}
-            disabled={busy}
+            disabled={busy || creatingStory}
           >
             Sign out
           </button>
@@ -652,24 +851,43 @@ export default function Admin() {
           <div>
             <p className="admin-eyebrow">CONTROL ROOM</p>
             <h1>Story management</h1>
+
             <p className="admin-muted">
               Manage community decisions and shape the next official chapter.
             </p>
           </div>
 
-          <button
-            className="admin-secondary"
-            onClick={() =>
-              loadStories().catch((err) => setError(err.message))
-            }
-            disabled={busy}
-          >
-            ↻ Refresh stories
-          </button>
+          <div className="admin-heading-actions">
+            <button
+              className="admin-primary"
+              onClick={() => {
+                setShowNewStory((current) => !current);
+                setError("");
+                setNotice("");
+                setDraft(null);
+                setDraftSlug("");
+              }}
+              disabled={busy || creatingStory}
+            >
+              {showNewStory ? "Close form" : "+ Create new story"}
+            </button>
+
+            <button
+              className="admin-secondary"
+              onClick={() =>
+                loadStories().catch((err) => setError(err.message))
+              }
+              disabled={busy || creatingStory}
+            >
+              ↻ Refresh stories
+            </button>
+          </div>
         </div>
 
         {notice && (
-          <p className="admin-alert admin-alert-success">{notice}</p>
+          <p className="admin-alert admin-alert-success">
+            {notice}
+          </p>
         )}
 
         {error && (
@@ -677,6 +895,210 @@ export default function Admin() {
             {error}
           </p>
         )}
+
+        {/* NEW STORY CREATION FORM */}
+
+        {showNewStory && (
+          <section className="admin-panel admin-new-story">
+            <div className="admin-panel-heading">
+              <div>
+                <p className="admin-eyebrow">NEW SERIES</p>
+                <h2>Create a new story</h2>
+
+                <p className="admin-muted">
+                  Start a completely independent TWISTED community story.
+                </p>
+              </div>
+
+              <span className="admin-status status-voting">
+                EPISODE 1
+              </span>
+            </div>
+
+            <form onSubmit={handleCreateStory}>
+              <div className="admin-new-story-grid">
+                <div>
+                  <label htmlFor="new-story-title">Story title</label>
+
+                  <input
+                    id="new-story-title"
+                    value={newStory.title}
+                    onChange={(event) =>
+                      updateNewStory("title", event.target.value)
+                    }
+                    placeholder="e.g. THE LAST CALL"
+                    maxLength={100}
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="new-story-genre">Genre</label>
+
+                  <select
+                    id="new-story-genre"
+                    value={newStory.genre}
+                    onChange={(event) =>
+                      updateNewStory("genre", event.target.value)
+                    }
+                    required
+                  >
+                    <option>Psychological Thriller</option>
+                    <option>Horror</option>
+                    <option>Mystery</option>
+                    <option>Science Fiction</option>
+                    <option>Fantasy</option>
+                    <option>Romance</option>
+                    <option>Drama</option>
+                    <option>Crime</option>
+                    <option>Adventure</option>
+                    <option>Comedy</option>
+                    <option>Supernatural</option>
+                    <option>Other</option>
+                  </select>
+                </div>
+              </div>
+
+              <label htmlFor="new-story-description">
+                Story description
+              </label>
+
+              <textarea
+                id="new-story-description"
+                rows="3"
+                value={newStory.description}
+                onChange={(event) =>
+                  updateNewStory("description", event.target.value)
+                }
+                placeholder="Write a short introduction that makes readers curious..."
+                maxLength={1000}
+                required
+              />
+
+              <div className="admin-new-story-grid">
+                <div>
+                  <label htmlFor="new-story-episodes">
+                    Planned number of episodes
+                  </label>
+
+                  <input
+                    id="new-story-episodes"
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={newStory.plannedEpisodes}
+                    onChange={(event) =>
+                      updateNewStory(
+                        "plannedEpisodes",
+                        event.target.value
+                      )
+                    }
+                    required
+                  />
+
+                  <p className="admin-field-help">
+                    Choose between 1 and 50 episodes. Default: 8.
+                  </p>
+                </div>
+
+                <div className="admin-series-preview">
+                  <span>SERIES LENGTH</span>
+                  <strong>
+                    {newStory.plannedEpisodes || 0} episodes
+                  </strong>
+                  <small>Episode 1 will open for voting.</small>
+                </div>
+              </div>
+
+              <label htmlFor="new-story-content">
+                Opening episode content
+              </label>
+
+              <textarea
+                id="new-story-content"
+                className="admin-story-editor"
+                rows="12"
+                value={newStory.content}
+                onChange={(event) =>
+                  updateNewStory("content", event.target.value)
+                }
+                placeholder="Write the opening episode here..."
+                required
+              />
+
+              <div className="admin-content-label">
+                <span className="admin-muted">
+                  Opening episode word count
+                </span>
+
+                <span className="admin-word-count">
+                  {getWordCount(newStory.content)} words
+                </span>
+              </div>
+
+              <div className="admin-choices-editor">
+                <div className="admin-editor-subheading">
+                  <h3>Community voting choices</h3>
+                  <span>Exactly 3 required</span>
+                </div>
+
+                {newStory.choices.map((choice, index) => (
+                  <div className="admin-choice-edit-row" key={index}>
+                    <span className="admin-choice-number">
+                      {String.fromCharCode(65 + index)}
+                    </span>
+
+                    <input
+                      value={choice}
+                      onChange={(event) =>
+                        updateNewStoryChoice(index, event.target.value)
+                      }
+                      placeholder={`Voting choice ${index + 1}`}
+                      maxLength={150}
+                      required
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="admin-new-story-notice">
+                <strong>Before creating your story</strong>
+
+                <p>
+                  Episode 1 will be published immediately. Readers will be
+                  able to vote on the three choices. This story will have its
+                  own independent voting and episode history.
+                </p>
+              </div>
+
+              <div className="admin-actions admin-publish-actions">
+                <button
+                  type="submit"
+                  className="admin-primary"
+                  disabled={creatingStory || busy}
+                >
+                  {creatingStory
+                    ? "Creating story..."
+                    : "Create story and open voting →"}
+                </button>
+
+                <button
+                  type="button"
+                  className="admin-secondary"
+                  onClick={() => {
+                    setShowNewStory(false);
+                    setNewStory(emptyNewStory);
+                  }}
+                  disabled={creatingStory}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </section>
+        )}
+
+        {/* ADMIN STATISTICS */}
 
         <section className="admin-stats">
           <article>
@@ -700,14 +1122,17 @@ export default function Admin() {
           </article>
         </section>
 
+        {/* MAIN ADMIN GRID */}
+
         <div className="admin-grid">
           <section className="admin-panel">
             <div className="admin-panel-heading">
               <div>
                 <p className="admin-eyebrow">LIBRARY</p>
-                <h2>Episodes</h2>
+                <h2>Episode management</h2>
+
                 <p className="admin-muted">
-                  Select an episode to view its status and manage voting.
+                  Choose a story series and then select an episode to manage.
                 </p>
               </div>
             </div>
@@ -715,37 +1140,77 @@ export default function Admin() {
             {stories.length === 0 ? (
               <p className="admin-muted">No episodes found.</p>
             ) : (
-              <div className="admin-episode-list">
-                {stories.map((item) => (
-                  <button
-                    key={item.slug}
-                    className={`admin-episode-item ${
-                      selectedSlug === item.slug ? "active" : ""
-                    }`}
-                    onClick={() => {
-                      setSelectedSlug(item.slug);
-                      setDraft(null);
-                      setDraftSlug("");
-                      setError("");
-                      setNotice("");
-                    }}
-                  >
-                    <span>
-                      <small>EPISODE {item.episode || "—"}</small>
-                      <strong>{item.title}</strong>
-                      <em>{item.genre || "Uncategorised"}</em>
-                    </span>
+              <div className="admin-library-selectors">
+                <div className="admin-library-selector">
+                  <label htmlFor="admin-series-select">
+                    SELECT A STORY
+                  </label>
 
-                    <span
-                      className={`admin-status status-${getStatusClass(item)}`}
-                    >
-                      {getStatusLabel(item)}
+                  <select
+                    id="admin-series-select"
+                    className="admin-library-select"
+                    value={selectedSeriesKey}
+                    onChange={(event) =>
+                      handleSeriesChange(event.target.value)
+                    }
+                  >
+                    {groupedStories.map((series) => (
+                      <option
+                        key={series.seriesKey}
+                        value={series.seriesKey}
+                      >
+                        {series.title} · {series.genre}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="admin-library-selector">
+                  <label htmlFor="admin-episode-select">
+                    SELECT AN EPISODE
+                  </label>
+
+                  <select
+                    id="admin-episode-select"
+                    className="admin-library-select"
+                    value={selectedSlug}
+                    onChange={(event) =>
+                      handleEpisodeChange(event.target.value)
+                    }
+                    disabled={selectedSeriesEpisodes.length === 0}
+                  >
+                    {selectedSeriesEpisodes.map((episode) => (
+                      <option
+                        key={episode.slug}
+                        value={episode.slug}
+                      >
+                        Episode {episode.episode || "—"} — {episode.title} (
+                        {getStatusLabel(episode)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedSeries && (
+                  <div className="admin-library-summary">
+                    <div>
+                      <span>SELECTED SERIES</span>
+                      <strong>{selectedSeries.title}</strong>
+                    </div>
+
+                    <span className="admin-series-count">
+                      {selectedSeries.episodes.length}{" "}
+                      {selectedSeries.episodes.length === 1
+                        ? "episode"
+                        : "episodes"}
                     </span>
-                  </button>
-                ))}
+                  </div>
+                )}
               </div>
             )}
           </section>
+
+          {/* SELECTED EPISODE DETAILS */}
 
           <section className="admin-panel admin-detail-panel">
             {selectedStory ? (
@@ -755,7 +1220,9 @@ export default function Admin() {
                     <p className="admin-eyebrow">
                       EPISODE {selectedStory.episode || "—"}
                     </p>
+
                     <h2>{selectedStory.title}</h2>
+
                     <p className="admin-muted">
                       {selectedStory.genre || "Uncategorised"} ·{" "}
                       {selectedStory.slug}
@@ -769,6 +1236,19 @@ export default function Admin() {
                   >
                     {getStatusLabel(selectedStory)}
                   </span>
+                </div>
+
+                <div className="admin-series-information">
+                  <span>SERIES PROGRESS</span>
+
+                  <strong>
+                    Episode {selectedStory.episode || 1} of{" "}
+                    {selectedStory.plannedEpisodes || 8}
+                  </strong>
+
+                  {seriesIsCompleted && (
+                    <small>Series episode limit reached.</small>
+                  )}
                 </div>
 
                 <p className="admin-description">
@@ -797,6 +1277,7 @@ export default function Admin() {
                   <div className="admin-winner">
                     <span>OFFICIAL STORY DIRECTION</span>
                     <strong>{officialWinner.title}</strong>
+
                     <p>
                       This is the community decision that should guide the
                       next episode.
@@ -805,6 +1286,7 @@ export default function Admin() {
                 ) : selectedStory.status === "completed" ? (
                   <div className="admin-no-winner">
                     <strong>No official winner recorded yet.</strong>
+
                     <p>
                       Check the voting results or complete the runoff before
                       generating the next episode.
@@ -864,7 +1346,7 @@ export default function Admin() {
                     </button>
                   )}
 
-                  {canGenerateNextEpisode && (
+                  {canGenerateNextEpisode && !seriesIsCompleted && (
                     <button
                       className="admin-primary"
                       disabled={busy}
@@ -874,6 +1356,19 @@ export default function Admin() {
                     </button>
                   )}
                 </div>
+
+                {seriesIsCompleted && (
+                  <div className="admin-series-finished">
+                    <strong>
+                      This series has reached its planned ending.
+                    </strong>
+
+                    <p>
+                      You can create another independent story using the
+                      Create New Story button above.
+                    </p>
+                  </div>
+                )}
 
                 {selectedStory.status === "draft" && (
                   <button
@@ -907,19 +1402,24 @@ export default function Admin() {
           </section>
         </div>
 
+        {/* DRAFT EDITOR */}
+
         {draft && (
           <section className="admin-panel admin-editor">
             <div className="admin-panel-heading">
               <div>
                 <p className="admin-eyebrow">AI-GENERATED CONTENT</p>
                 <h2>Review episode draft</h2>
+
                 <p className="admin-muted">
                   Review the story carefully. It will not appear publicly
                   until you publish it.
                 </p>
               </div>
 
-              <span className="admin-status status-draft">DRAFT</span>
+              <span className="admin-status status-draft">
+                DRAFT
+              </span>
             </div>
 
             <div className="admin-editor-guideline">
@@ -930,6 +1430,7 @@ export default function Admin() {
             </div>
 
             <label htmlFor="draft-title">Episode title</label>
+
             <input
               id="draft-title"
               value={draft.title || ""}
@@ -940,6 +1441,7 @@ export default function Admin() {
             />
 
             <label htmlFor="draft-genre">Genre</label>
+
             <input
               id="draft-genre"
               value={draft.genre || ""}
@@ -948,7 +1450,10 @@ export default function Admin() {
               }
             />
 
-            <label htmlFor="draft-description">Short description</label>
+            <label htmlFor="draft-description">
+              Short description
+            </label>
+
             <textarea
               id="draft-description"
               rows="3"
@@ -986,22 +1491,30 @@ export default function Admin() {
 
             <p className="admin-word-guidance">
               {draftWordCount < MIN_EPISODE_WORDS
-                ? `Add ${MIN_EPISODE_WORDS - draftWordCount} more words to reach the minimum.`
+                ? `Add ${
+                    MIN_EPISODE_WORDS - draftWordCount
+                  } more words to reach the minimum.`
                 : draftWordCount > MAX_EPISODE_WORDS
-                  ? `Remove ${draftWordCount - MAX_EPISODE_WORDS} words to meet the limit.`
+                  ? `Remove ${
+                      draftWordCount - MAX_EPISODE_WORDS
+                    } words to meet the limit.`
                   : "Word count is within the agreed episode length."}
             </p>
 
             <div className="admin-choices-editor">
               <div className="admin-editor-subheading">
                 <h3>Voting choices</h3>
+
                 <span>
                   {(draft.choices || []).length} / 3 choices
                 </span>
               </div>
 
               {(draft.choices || []).map((choice, index) => (
-                <div className="admin-choice-edit-row" key={choice.id || index}>
+                <div
+                  className="admin-choice-edit-row"
+                  key={choice.id || index}
+                >
                   <span className="admin-choice-number">
                     {String.fromCharCode(65 + index)}
                   </span>
@@ -1021,9 +1534,12 @@ export default function Admin() {
             {draftValidationErrors.length > 0 && (
               <div className="admin-validation">
                 <strong>Review required before publishing</strong>
+
                 <ul>
                   {draftValidationErrors.map((validationError) => (
-                    <li key={validationError}>{validationError}</li>
+                    <li key={validationError}>
+                      {validationError}
+                    </li>
                   ))}
                 </ul>
               </div>
@@ -1032,6 +1548,7 @@ export default function Admin() {
             {draftValidationErrors.length === 0 && (
               <div className="admin-validation-success">
                 <strong>Draft meets the publishing checks.</strong>
+
                 <span>
                   You can save your changes or publish this episode.
                 </span>
